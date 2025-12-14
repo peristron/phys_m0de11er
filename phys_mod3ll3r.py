@@ -7,50 +7,38 @@ import re
 
 st.set_page_config(layout="wide", page_title="GenAI Physics Modeler", page_icon="⚛️")
 
-PRICING = {
-    "gpt-4o": {"input": 2.50, "output": 10.00},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},
-    "grok-4-0709": {"input": 3.00, "output": 15.00},
-    "grok-2-1212": {"input": 2.00, "output": 10.00},
-    "grok-3": {"input": 3.00, "output": 15.00},
-}
+PRICING = {"gpt-4o":{"input":2.5,"output":10},"gpt-4o-mini":{"input":0.15,"output":0.6},
+           "grok-4-1-fast-reasoning":{"input":0.2,"output":0.5},"grok-4-0709":{"input":3,"output":15},
+           "grok-2-1212":{"input":2,"output":10},"grok-3":{"input":3,"output":15}}
 
-SCENARIOS = {
-    "Custom": "",
-    "Rotating Sphere with Gas": "A wireframe sphere rotating on the Z-axis with 20 gas molecules bouncing around it inside a cubic container.",
-    "Rarefied Gas Spin-Up": "Simulate the transfer of conserved momentum from a rotating solid disk to gas molecules immediately adjacent to it in a vacuum. The gas should gradually spin up due to wall collisions.",
-    "Solar System w/ Comet": "A solar system simulation with a static yellow sun, 3 orbiting planets at different distances/speeds, and a comet passing through on a hyperbolic trajectory.",
-    "Damped Pendulum": "A 3D visualization of a simple pendulum with damping. Show the pendulum bob swinging in 3D space and trace its path color-coded by velocity.",
-    "Lorenz Attractor": "Simulate the Lorenz attractor (chaotic system). Visualize the trajectory of a point over time in 3D space, leaving a trail.",
-}
+SCENARIOS = {"Custom":"","Rotating Sphere with Gas":"A wireframe sphere rotating on the Z-axis with 20 gas molecules bouncing around it inside a cubic container.",
+             "Rarefied Gas Spin-Up":"Simulate the transfer of conserved momentum from a rotating solid disk to gas molecules immediately adjacent to it in a vacuum. The gas should gradually spin up due to wall collisions.",
+             "Solar System w/ Comet":"A solar system simulation with a static yellow sun, 3 orbiting planets at different distances/speeds, and a comet passing through on a hyperbolic trajectory.",
+             "Damped Pendulum":"A 3D visualization of a simple pendulum with damping. Show the pendulum bob swinging in 3D space and trace its path color-coded by velocity.",
+             "Lorenz Attractor":"Simulate the Lorenz attractor (chaotic system). Visualize the trajectory of a point over time in 3D space, leaving a trail."}
 
-for k, v in [("history", []), ("prompt", SCENARIOS["Rotating Sphere with Gas"])]:
-    if k not in st.session_state: st.session_state[k] = v
+for k,v in [("history",[]),("prompt",SCENARIOS["Rotating Sphere with Gas"])]: st.session_state.setdefault(k,v)
 
 def get_secret(k): return next((st.secrets[i] for i in [k,k.upper(),k.lower()] if i in st.secrets), None)
 
 def check_password():
-    pwd = get_secret("app_password")
-    if not pwd: st.error("Missing app_password"); st.stop()
-    def verify(): st.session_state.auth = st.session_state.pwd == pwd
+    pwd = get_secret("app_password") or st.stop()
+    def v(): st.session_state.auth = st.session_state.pwd == pwd
     if "auth" not in st.session_state:
-        st.text_input("Password", type="password", key="pwd", on_change=verify); return False
+        st.text_input("Password", type="password", key="pwd", on_change=v); return False
     if not st.session_state.auth:
-        st.text_input("Password", type="password", key="pwd", on_change=verify); st.error("Wrong"); return False
+        st.text_input("Password", type="password", key="pwd", on_change=v); st.error("Wrong"); return False
     return True
 
 def execute_safe_code(code, g):
     blocked = ['os','sys','subprocess','shutil','requests','socket','pickle','ctypes','urllib','pathlib']
-    def ri(name, *a, **kw): 
-        if name.split('.')[0] in blocked: raise ImportError()
-        return __import__(name, *a, **kw)
-    safe = dict(globals(__builtins__) if isinstance(__builtins__, dict) else getattr(__builtins__, "__dict__", {}))
-    for x in ['eval','exec','open','compile','__import__']: safe.pop(x, None)
+    def ri(name,*a,**kw): raise ImportError() if name.split('.')[0] in blocked else __import__(name,*a,**kw)
+    safe = __builtins__.copy() if isinstance(__builtins__, dict) else vars(__builtins__).copy()
+    for x in ['eval','exec','open','compile','__import__']: safe.pop(x,None)
     safe['__import__'] = ri
     g['__builtins__'] = safe
-    try: exec(code, g); return True, None
-    except Exception as e: return False, str(e)
+    try: exec(code,g); return True,None
+    except Exception as e: return False,str(e)
 
 def get_system_prompt():
     return """You are a perfect Python code generator for 3D physics animations using only numpy and plotly.graph_objects.
@@ -63,96 +51,71 @@ RULES:
 - ALWAYS set fixed axis ranges
 - Full numpy vectorization only"""
 
-def generate_simulation(prompt, key, url, model):
-    messages = [{"role":"system","content":get_system_prompt()}, {"role":"user","content":prompt}]
+def generate_simulation(prompt,key,url,model):
+    messages = [{"role":"system","content":get_system_prompt()},{"role":"user","content":prompt}]
     total_in = total_out = 0
     for _ in range(3):
-        resp = openai.OpenAI(api_key=key, base_url=url or None).chat.completions.create(
-            model=model, messages=messages, temperature=0.2, max_tokens=4096)
+        resp = openai.OpenAI(api_key=key,base_url=url or None).chat.completions.create(model=model,messages=messages,temperature=0.2,max_tokens=4096)
         raw = resp.choices[0].message.content
-        p, c = resp.usage.prompt_tokens if resp.usage else 0, resp.usage.completion_tokens if resp.usage else 0
+        p = resp.usage.prompt_tokens if resp.usage else 0
+        c = resp.usage.completion_tokens if resp.usage else 0
         total_in += p; total_out += c
         code = re.sub(r"^```.*?```$", "", raw, flags=re.DOTALL).strip()
-        g = {"np":np, "go":go}
-        ok, err = execute_safe_code(code, g)
-        if ok and "fig" in g and isinstance(g["fig"], go.Figure):
-            rates = PRICING.get(model, {"input":5,"output":15})
-            cost = (total_in/1e6)*rates["input"] + (total_out/1e6)*rates["output"]
-            return code, round(cost, 6)
-        messages += [{"role":"assistant","content":raw}, {"role":"user","content":f"Fix ONLY code:\n{err or 'Issue'}"}]
-    raise RuntimeError("Failed")
+        g = {"np":np,"go":go}
+        ok, err = execute_safe_code(code,g)
+        if ok and "fig" in g and isinstance(g["fig"],go.Figure):
+            rates = PRICING.get(model,{"input":5,"output":15})
+            cost = round((total_in/1e6)*rates["input"] + (total_out/1e6)*rates["output"],6)
+            return code,cost
+        messages += [{"role":"assistant","content":raw},{"role":"user","content":f"Fix ONLY code:\n{err or 'Issue'}"}]
+    raise RuntimeError("Failed after 3 tries")
 
 def main_app():
     with st.sidebar:
-        st.title("⚙️ Settings")
-        provider = st.radio("Model", ["xAI (Grok)", "OpenAI"], horizontal=True)
-        api_key = base_url = model = None
-        if provider == "xAI (Grok)":
-            api_key = get_secret("xai_api_key")
-            base_url = "https://api.x.ai/v1"
-            model = st.selectbox("Model", ["grok-4-1-fast-reasoning", "grok-4-0709", "grok-2-1212"], index=0)
+        st.title("Settings")
+        p = st.radio("Model",["xAI (Grok)","OpenAI"],horizontal=True)
+        key = url = model = None
+        if p=="xAI (Grok)":
+            key=get_secret("xai_api_key"); url="https://api.x.ai/v1"
+            model=st.selectbox("Model",["grok-4-1-fast-reasoning","grok-4-0709","grok-2-1212"],0)
         else:
-            api_key = get_secret("openai_api_key")
-            model = st.selectbox("Model", ["gpt-4o", "gpt-4o-mini"])
-        if not api_key: st.error("API key missing")
-
-        speed = st.slider("Speed", 10, 200, 60, 5)
+            key=get_secret("openai_api_key")
+            model=st.selectbox("Model",["gpt-4o","gpt-4o-mini"])
+        if not key: st.error("API key missing")
+        speed = st.slider("Speed",10,200,60,5)
         frame_dur = int(1000/speed)
 
-        with st.expander("💰 Cost", True):
-            total = sum(h.get("cost",0) for h in st.session_state.history)
-            st.write(f"**Session:** ${total:.6f}")
-            if st.session_state.history:
-                last = st.session_state.history[-1]
-                st.write(f"**Last:** ${last['cost']:.6f}")
+    st.title("GenAI Physics Modeler")
+    st.selectbox("Scenarios",list(SCENARIOS),key="sel",
+                 on_change=lambda: st.session_state.update(prompt=SCENARIOS[st.session_state.sel] if st.session_state.sel!="Custom" else ""))
 
-    st.title("⚛️ Generative Physics Modeler")
-    st.selectbox("Scenarios", list(SCENARIOS), key="sel",
-                 on_change=lambda: st.session_state.update(prompt=SCENARIOS[st.session_state.sel] if st.session_state.sel != "Custom" else ""))
-
-    prompt = st.text_area("Physics Description", st.session_state.prompt, height=110, key="prompt_input")
+    prompt = st.text_area("Physics Description",st.session_state.prompt,height=110,key="prompt_input")
     st.session_state.prompt = prompt
 
-    if st.button("🚀 Generate", type="primary", use_container_width=True, disabled=not api_key):
+    if st.button("Generate",type="primary",use_container_width=True,disabled=not key):
         with st.status("Generating..."):
-            code, cost = generate_simulation(prompt, api_key, base_url, model)
+            code,cost = generate_simulation(prompt,key,url,model)
             st.session_state.current_code = code
-            st.session_state.history.append({"code":code, "prompt":prompt, "model":model, "cost":cost})
+            st.session_state.history.append({"code":code,"prompt":prompt,"model":model,"cost":cost})
             st.rerun()
 
     if st.session_state.get("current_code"):
-        with st.expander("Code"):
-            st.code(st.session_state.current_code, "python")
-            st.download_button("Download .py", st.session_state.current_code, "sim.py")
-
-        g = {"np":np, "go":go}
-        ok, err = execute_safe_code(st.session_state.current_code, g)
+        g = {"np":np,"go":go}
+        ok,err = execute_safe_code(st.session_state.current_code,g)
         if ok and "fig" in g:
-            fig = g["fig"]
-            fig.update_layout(
-                height=800, margin=dict(l=0,r=0,t=40,b=0), scene=dict(aspectmode='cube'),
-                updatemenus=[dict(
-                    buttons=[
-                        dict(label="▶️ Play", method="animate",
-                             args=[None, dict(frame=dict(duration=frame_dur, redraw=True),
-                                              fromcurrent=False, mode="immediate")]),
-                        dict(label="⏸️ Pause", method="animate",
-                             args=[[None], dict(mode="immediate")])
-                    ],
-                    x=0, y=1.15, xanchor="left", yanchor="top", showactive=False
-                )]
-            )
+            fig: go.Figure = g["fig"]
+            fig.update_layout(height=800,margin=dict(l=0,r=0,t=40,b=0),scene=dict(aspectmode='cube'),
+                updatemenus=[dict(buttons=[
+                    dict(label="Play",method="animate",args=[None,dict(frame=dict(duration=frame_dur,redraw=True),
+                                          fromcurrent=False,mode="immediate")]),
+                    dict(label="Pause",method="animate",args=[[None],dict(mode="immediate")])
+                ],x=0,y=1.15,xanchor="left",yanchor="top",showactive=False)])
             if fig.frames:
                 fig.layout.updatemenus[0].buttons[0].args[1]["frame"]["loop"] = "infinite"
-
-            fig.add_annotation(
-                text="∞ looping ∙ auto-play",
-                xref="paper", yref="paper", x=0.02, y=1.11,
-                showarrow=False, font=dict(size=11,color="#00ff88"),
-                bgcolor="rgba(0,0,0,0.8)", bordercolor="#00ff88", borderwidth=1, borderpad=4
-            )
-
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            fig.add_annotation(text="∞ looping ∙ auto-play",xref="paper",yref="paper",x=0.02,y=1.11,
+                               showarrow=False,font=dict(size=11,color="#00ff88"),
+                               bgcolor="rgba(0,0,0,0.8)",bordercolor="#00ff88",borderwidth=1,borderpad=4)
+            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
         else:
             st.error(err or "No `fig`")
 
