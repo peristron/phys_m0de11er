@@ -85,6 +85,13 @@ def main_app():
         speed = st.slider("Speed",10,200,60,5)
         frame_dur = int(1000/speed)
 
+        # ← COST CALCULATOR IS BACK
+        total_cost = sum(h.get("cost",0) for h in st.session_state.history)
+        st.metric("💰 Session Cost", f"${total_cost:.6f}")
+        if st.session_state.history:
+            last = st.session_state.history[-1]
+            st.caption(f"Last run: ${last['cost']:.6f} ({last['model']})")
+
     st.title("GenAI Physics Modeler")
     st.selectbox("Scenarios",list(SCENARIOS),key="sel",
                  on_change=lambda: st.session_state.update(prompt=SCENARIOS[st.session_state.sel] if st.session_state.sel!="Custom" else ""))
