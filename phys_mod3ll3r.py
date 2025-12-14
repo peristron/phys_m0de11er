@@ -380,94 +380,139 @@ def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
     
     return fig, num_frames
 
-def generate_autoplay_loop_script(auto_play, loop_animation, frame_dur, num_frames):
-    """Generate JavaScript for auto-play and loop functionality."""
+def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_frames, height=800):
+    """Render Plotly figure as HTML with embedded auto-play and loop JavaScript."""
     
-    script_parts = []
+    # Convert figure to HTML (without full HTML wrapper)
+    fig_html = fig.to_html(
+        include_plotlyjs='cdn',
+        full_html=False,
+        config={
+            'displayModeBar': True,
+            'scrollZoom': True,
+            'responsive': True
+        }
+    )
     
-    if auto_play or loop_animation:
-        script_parts.append("""
-        <script>
-        (function() {
-            let animationInterval = null;
-            let isPlaying = false;
-            let currentFrame = 0;
-            const totalFrames = """ + str(num_frames) + """;
-            const frameDuration = """ + str(frame_dur) + """;
-            const shouldLoop = """ + str(loop_animation).lower() + """;
-            const shouldAutoPlay = """ + str(auto_play).lower() + """;
+    # JavaScript for auto-play and looping
+    animation_script = f"""
+    <script>
+    (function() {{
+        const FRAME_DURATION = {frame_dur};
+        const SHOULD_LOOP = {str(loop_animation).lower()};
+        const SHOULD_AUTOPLAY = {str(auto_play).lower()};
+        const TOTAL_FRAMES = {num_frames};
+        
+        let plotDiv = null;
+        let isAnimating = false;
+        let loopEnabled = SHOULD_LOOP;
+        
+        function findPlotDiv() {{
+            // Find the Plotly graph div
+            const divs = document.querySelectorAll('.plotly-graph-div, .js-plotly-plot');
+            for (let div of divs) {{
+                if (div._fullLayout) {{
+                    return div;
+                }}
+            }}
+            return null;
+        }}
+        
+        function getButtons() {{
+            return document.querySelectorAll('.updatemenu-button');
+        }}
+        
+        function clickPlay() {{
+            const buttons = getButtons();
+            if (buttons.length > 0) {{
+                buttons[0].click();
+                isAnimating = true;
+                return true;
+            }}
+            return false;
+        }}
+        
+        function clickRestart() {{
+            const buttons = getButtons();
+            if (buttons.length >= 3) {{
+                buttons[2].click();
+                return true;
+            }}
+            return false;
+        }}
+        
+        function setupLoopHandler() {{
+            if (!plotDiv || !loopEnabled) return;
             
-            function findPlotlyDiv() {
-                return document.querySelector('.js-plotly-plot');
-            }
+            // Remove any existing handler
+            if (plotDiv._loopHandler) {{
+                plotDiv.removeListener('plotly_animated', plotDiv._loopHandler);
+            }}
             
-            function clickPlayButton() {
-                const buttons = document.querySelectorAll('.updatemenu-button');
-                if (buttons.length > 0) {
-                    buttons[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                    return true;
-                }
-                return false;
-            }
+            // Create new handler
+            plotDiv._loopHandler = function() {{
+                if (loopEnabled) {{
+                    setTimeout(function() {{
+                        clickRestart();
+                        setTimeout(function() {{
+                            clickPlay();
+                        }}, 100);
+                    }}, 50);
+                }}
+            }};
             
-            function clickRestartButton() {
-                const buttons = document.querySelectorAll('.updatemenu-button');
-                if (buttons.length >= 3) {
-                    buttons[2].dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                    return true;
-                }
-                return false;
-            }
+            plotDiv.on('plotly_animated', plotDiv._loopHandler);
+        }}
+        
+        function initialize() {{
+            plotDiv = findPlotDiv();
             
-            function setupLoopListener() {
-                if (!shouldLoop) return;
-                
-                const plotDiv = findPlotlyDiv();
-                if (!plotDiv) return;
-                
-                if (plotDiv._loopListenerAdded) return;
-                plotDiv._loopListenerAdded = true;
-                
-                plotDiv.on('plotly_animated', function() {
-                    if (shouldLoop) {
-                        setTimeout(function() {
-                            clickRestartButton();
-                            setTimeout(function() {
-                                clickPlayButton();
-                            }, 100);
-                        }, 50);
-                    }
-                });
-            }
+            if (!plotDiv) {{
+                setTimeout(initialize, 100);
+                return;
+            }}
             
-            function initAnimation() {
-                const plotDiv = findPlotlyDiv();
-                if (!plotDiv) {
-                    setTimeout(initAnimation, 200);
-                    return;
-                }
-                
-                setupLoopListener();
-                
-                if (shouldAutoPlay) {
-                    setTimeout(function() {
-                        clickPlayButton();
-                    }, 500);
-                }
-            }
+            // Wait for Plotly to fully initialize
+            if (typeof plotDiv.on !== 'function') {{
+                setTimeout(initialize, 100);
+                return;
+            }}
             
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', function() {
-                    setTimeout(initAnimation, 800);
-                });
-            } else {
-                setTimeout(initAnimation, 800);
-            }
-        })();
-        </script>
-        """)
+            // Setup loop handler
+            if (SHOULD_LOOP) {{
+                setupLoopHandler();
+            }}
+            
+            // Auto-play
+            if (SHOULD_AUTOPLAY) {{
+                setTimeout(function() {{
+                    clickPlay();
+                }}, 300);
+            }}
+        }}
+        
+        // Start initialization when DOM is ready
+        if (document.readyState === 'complete') {{
+            setTimeout(initialize, 200);
+        }} else {{
+            window.addEventListener('load', function() {{
+                setTimeout(initialize, 200);
+            }});
+        }}
+    }})();
+    </script>
+    """
     
-    return ''.join(script_parts)
+    # Combine HTML and script
+    full_html = f"""
+    <div style="width: 100%; height: {height}px;">
+        {fig_html}
+    </div>
+    {animation_script}
+    """
+    
+    # Render using components.html
+    components.html(full_html, height=height + 50, scrolling=False)
 
 # --- Main App ---
 def main_app():
@@ -634,6 +679,7 @@ def main_app():
         if success and "fig" in exec_globals:
             fig = exec_globals["fig"]
             
+            # Add animation controls to the figure
             fig, num_frames = add_animation_controls(
                 fig,
                 frame_dur,
@@ -641,6 +687,7 @@ def main_app():
                 st.session_state.show_slider
             )
             
+            # Display animation info
             if num_frames > 0:
                 status_col1, status_col2, status_col3 = st.columns([1, 1, 2])
                 with status_col1:
@@ -657,16 +704,15 @@ def main_app():
                     if status_items:
                         st.info(" | ".join(status_items))
             
-            st.plotly_chart(fig, use_container_width=True, key="main_animation")
-            
-            if st.session_state.auto_play or st.session_state.loop_animation:
-                autoplay_script = generate_autoplay_loop_script(
-                    st.session_state.auto_play,
-                    st.session_state.loop_animation,
-                    frame_dur,
-                    num_frames
-                )
-                components.html(autoplay_script, height=0)
+            # Render the figure with auto-play and loop functionality
+            render_plotly_with_autoplay(
+                fig,
+                frame_dur,
+                st.session_state.auto_play,
+                st.session_state.loop_animation,
+                num_frames,
+                height=800
+            )
                 
         elif not success:
             st.error(f"⚠️ Runtime error in generated code:\n{error}")
