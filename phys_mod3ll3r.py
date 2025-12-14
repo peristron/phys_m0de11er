@@ -4,6 +4,7 @@ import openai
 import numpy as np
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
+import json
 import re
 
 # --- Page Configuration ---
@@ -68,6 +69,12 @@ SCENARIOS = {
     "Damped Pendulum": "A 3D visualization of a simple pendulum with damping. Show the pendulum bob swinging in 3D space and trace its path color-coded by velocity.",
     "Lorenz Attractor": "Simulate the Lorenz attractor (chaotic system). Visualize the trajectory of a point over time in 3D space, leaving a trail.",
 }
+
+# Dark theme color constants
+DARK_BG = '#0e1117'
+DARK_SECONDARY = '#1a1d24'
+GRID_COLOR = '#333940'
+TEXT_COLOR = '#fafafa'
 
 # --- Session State Initialization ---
 if "history" not in st.session_state:
@@ -293,23 +300,58 @@ def update_prompt():
     if sel != "Custom":
         st.session_state.prompt = SCENARIOS[sel]
 
-def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
+def apply_dark_theme(fig):
+    """Apply dark theme to the Plotly figure."""
+    fig.update_layout(
+        paper_bgcolor=DARK_BG,
+        plot_bgcolor=DARK_BG,
+        font=dict(color=TEXT_COLOR),
+        scene=dict(
+            bgcolor=DARK_BG,
+            xaxis=dict(
+                backgroundcolor=DARK_SECONDARY,
+                gridcolor=GRID_COLOR,
+                color=TEXT_COLOR,
+                showbackground=True,
+                zerolinecolor=GRID_COLOR
+            ),
+            yaxis=dict(
+                backgroundcolor=DARK_SECONDARY,
+                gridcolor=GRID_COLOR,
+                color=TEXT_COLOR,
+                showbackground=True,
+                zerolinecolor=GRID_COLOR
+            ),
+            zaxis=dict(
+                backgroundcolor=DARK_SECONDARY,
+                gridcolor=GRID_COLOR,
+                color=TEXT_COLOR,
+                showbackground=True,
+                zerolinecolor=GRID_COLOR
+            ),
+        ),
+        legend=dict(
+            bgcolor='rgba(0,0,0,0)',
+            font=dict(color=TEXT_COLOR)
+        )
+    )
+    return fig
+
+def add_animation_controls(fig, frame_dur, show_slider):
     """Add play/pause buttons, restart, and optional slider to the figure."""
     
     num_frames = len(fig.frames) if hasattr(fig, 'frames') and fig.frames else 0
-    
-    play_args = dict(
-        frame=dict(duration=frame_dur, redraw=True),
-        fromcurrent=True,
-        transition=dict(duration=0),
-        mode="immediate"
-    )
     
     buttons = [
         dict(
             label="▶️ Play",
             method="animate",
-            args=[None, play_args]
+            args=[None, dict(
+                frame=dict(duration=frame_dur, redraw=True),
+                fromcurrent=True,
+                transition=dict(duration=0),
+                mode="immediate"
+            )]
         ),
         dict(
             label="⏸️ Pause",
@@ -333,7 +375,9 @@ def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
         yanchor="top",
         pad=dict(t=0, r=10),
         buttons=buttons,
-        direction="left"
+        direction="left",
+        bgcolor='rgba(50,50,50,0.8)',
+        font=dict(color=TEXT_COLOR)
     )]
     
     sliders = None
@@ -364,10 +408,14 @@ def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
                 prefix="Frame: ",
                 visible=True,
                 xanchor="center",
-                font=dict(size=12)
+                font=dict(size=12, color=TEXT_COLOR)
             ),
             transition=dict(duration=0),
-            ticklen=4
+            ticklen=4,
+            font=dict(color=TEXT_COLOR),
+            bgcolor=DARK_SECONDARY,
+            bordercolor=GRID_COLOR,
+            tickcolor=TEXT_COLOR
         )]
     
     fig.update_layout(
@@ -381,9 +429,16 @@ def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
     return fig, num_frames
 
 def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_frames, height=800):
-    """Render Plotly figure as HTML with embedded auto-play and loop JavaScript."""
+    """Render Plotly figure with custom animation loop for reliable auto-play and looping."""
     
-    # Convert figure to HTML (without full HTML wrapper)
+    # Get frame names for JavaScript
+    frame_names = []
+    if hasattr(fig, 'frames') and fig.frames:
+        frame_names = [f.name if f.name else f"frame_{i}" for i, f in enumerate(fig.frames)]
+    
+    frame_names_json = json.dumps(frame_names)
+    
+    # Convert figure to HTML
     fig_html = fig.to_html(
         include_plotlyjs='cdn',
         full_html=False,
@@ -394,7 +449,7 @@ def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_f
         }
     )
     
-    # JavaScript for auto-play and looping
+    # Custom animation JavaScript with reliable looping
     animation_script = f"""
     <script>
     (function() {{
@@ -402,93 +457,143 @@ def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_f
         const SHOULD_LOOP = {str(loop_animation).lower()};
         const SHOULD_AUTOPLAY = {str(auto_play).lower()};
         const TOTAL_FRAMES = {num_frames};
+        const FRAME_NAMES = {frame_names_json};
         
         let plotDiv = null;
-        let isAnimating = false;
-        let loopEnabled = SHOULD_LOOP;
+        let animationTimer = null;
+        let currentFrame = 0;
+        let isPlaying = false;
+        let buttonsHooked = false;
         
-        function findPlotDiv() {{
-            // Find the Plotly graph div
+        function getPlotDiv() {{
+            if (plotDiv && plotDiv._fullLayout) return plotDiv;
             const divs = document.querySelectorAll('.plotly-graph-div, .js-plotly-plot');
-            for (let div of divs) {{
-                if (div._fullLayout) {{
-                    return div;
+            for (let d of divs) {{
+                if (d._fullLayout && d.data) {{
+                    plotDiv = d;
+                    return d;
                 }}
             }}
             return null;
         }}
         
-        function getButtons() {{
-            return document.querySelectorAll('.updatemenu-button');
-        }}
-        
-        function clickPlay() {{
-            const buttons = getButtons();
-            if (buttons.length > 0) {{
-                buttons[0].click();
-                isAnimating = true;
-                return true;
-            }}
-            return false;
-        }}
-        
-        function clickRestart() {{
-            const buttons = getButtons();
-            if (buttons.length >= 3) {{
-                buttons[2].click();
-                return true;
-            }}
-            return false;
-        }}
-        
-        function setupLoopHandler() {{
-            if (!plotDiv || !loopEnabled) return;
+        function goToFrame(idx) {{
+            const div = getPlotDiv();
+            if (!div || FRAME_NAMES.length === 0 || idx < 0 || idx >= FRAME_NAMES.length) return;
             
-            // Remove any existing handler
-            if (plotDiv._loopHandler) {{
-                plotDiv.removeListener('plotly_animated', plotDiv._loopHandler);
-            }}
+            Plotly.animate(div, [FRAME_NAMES[idx]], {{
+                mode: 'immediate',
+                transition: {{ duration: 0 }},
+                frame: {{ duration: 0, redraw: true }}
+            }});
+        }}
+        
+        function step() {{
+            if (!isPlaying) return;
             
-            // Create new handler
-            plotDiv._loopHandler = function() {{
-                if (loopEnabled) {{
-                    setTimeout(function() {{
-                        clickRestart();
-                        setTimeout(function() {{
-                            clickPlay();
-                        }}, 100);
-                    }}, 50);
+            currentFrame++;
+            if (currentFrame >= TOTAL_FRAMES) {{
+                if (SHOULD_LOOP) {{
+                    currentFrame = 0;
+                }} else {{
+                    pause();
+                    return;
                 }}
-            }};
+            }}
+            goToFrame(currentFrame);
+        }}
+        
+        function play() {{
+            if (isPlaying) return;
+            if (TOTAL_FRAMES === 0) return;
             
-            plotDiv.on('plotly_animated', plotDiv._loopHandler);
+            isPlaying = true;
+            if (animationTimer) clearInterval(animationTimer);
+            animationTimer = setInterval(step, FRAME_DURATION);
+            console.log('Animation started, loop:', SHOULD_LOOP);
+        }}
+        
+        function pause() {{
+            isPlaying = false;
+            if (animationTimer) {{
+                clearInterval(animationTimer);
+                animationTimer = null;
+            }}
+            console.log('Animation paused at frame:', currentFrame);
+        }}
+        
+        function restart() {{
+            pause();
+            currentFrame = 0;
+            goToFrame(0);
+            console.log('Animation restarted');
+        }}
+        
+        function hookButtons() {{
+            if (buttonsHooked) return true;
+            
+            const buttons = document.querySelectorAll('.updatemenu-button');
+            if (buttons.length < 3) return false;
+            
+            // Clone buttons to remove Plotly's event handlers
+            buttons.forEach((btn, idx) => {{
+                const newBtn = btn.cloneNode(true);
+                btn.parentNode.replaceChild(newBtn, btn);
+            }});
+            
+            // Get the new buttons and attach our handlers
+            const newButtons = document.querySelectorAll('.updatemenu-button');
+            
+            // Play button
+            newButtons[0].addEventListener('click', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                play();
+            }});
+            
+            // Pause button
+            newButtons[1].addEventListener('click', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                pause();
+            }});
+            
+            // Restart button
+            newButtons[2].addEventListener('click', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                restart();
+            }});
+            
+            buttonsHooked = true;
+            console.log('Buttons hooked successfully');
+            return true;
         }}
         
         function initialize() {{
-            plotDiv = findPlotDiv();
-            
-            if (!plotDiv) {{
+            const div = getPlotDiv();
+            if (!div) {{
                 setTimeout(initialize, 100);
                 return;
             }}
             
-            // Wait for Plotly to fully initialize
-            if (typeof plotDiv.on !== 'function') {{
-                setTimeout(initialize, 100);
-                return;
+            console.log('Plotly div found, initializing animation controller...');
+            
+            // Wait for buttons to render then hook them
+            function waitForButtons() {{
+                if (hookButtons()) {{
+                    // Auto-play if enabled
+                    if (SHOULD_AUTOPLAY && TOTAL_FRAMES > 0) {{
+                        setTimeout(function() {{
+                            play();
+                        }}, 200);
+                    }}
+                }} else {{
+                    setTimeout(waitForButtons, 100);
+                }}
             }}
             
-            // Setup loop handler
-            if (SHOULD_LOOP) {{
-                setupLoopHandler();
-            }}
-            
-            // Auto-play
-            if (SHOULD_AUTOPLAY) {{
-                setTimeout(function() {{
-                    clickPlay();
-                }}, 300);
-            }}
+            setTimeout(waitForButtons, 300);
         }}
         
         // Start initialization when DOM is ready
@@ -503,15 +608,41 @@ def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_f
     </script>
     """
     
-    # Combine HTML and script
-    full_html = f"""
-    <div style="width: 100%; height: {height}px;">
-        {fig_html}
-    </div>
-    {animation_script}
+    # Dark theme CSS to ensure consistent background
+    dark_css = f"""
+    <style>
+        .plotly-graph-div, .js-plotly-plot, .plot-container, .svg-container {{
+            background-color: {DARK_BG} !important;
+        }}
+        .modebar {{
+            background-color: rgba(0,0,0,0.5) !important;
+        }}
+        .modebar-btn path {{
+            fill: {TEXT_COLOR} !important;
+        }}
+        .modebar-btn:hover path {{
+            fill: #4fc3f7 !important;
+        }}
+    </style>
     """
     
-    # Render using components.html
+    # Combine everything
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        {dark_css}
+    </head>
+    <body style="margin: 0; padding: 0; background-color: {DARK_BG};">
+        <div style="width: 100%; height: {height}px; background-color: {DARK_BG};">
+            {fig_html}
+        </div>
+        {animation_script}
+    </body>
+    </html>
+    """
+    
     components.html(full_html, height=height + 50, scrolling=False)
 
 # --- Main App ---
@@ -679,11 +810,13 @@ def main_app():
         if success and "fig" in exec_globals:
             fig = exec_globals["fig"]
             
+            # Apply dark theme
+            fig = apply_dark_theme(fig)
+            
             # Add animation controls to the figure
             fig, num_frames = add_animation_controls(
                 fig,
                 frame_dur,
-                st.session_state.loop_animation,
                 st.session_state.show_slider
             )
             
@@ -704,7 +837,7 @@ def main_app():
                     if status_items:
                         st.info(" | ".join(status_items))
             
-            # Render the figure with auto-play and loop functionality
+            # Render with custom animation controller
             render_plotly_with_autoplay(
                 fig,
                 frame_dur,
