@@ -3,6 +3,7 @@ import streamlit as st
 import openai
 import numpy as np
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 import re
 
 # --- Page Configuration ---
@@ -10,12 +11,53 @@ st.set_page_config(layout="wide", page_title="GenAI Physics Modeler", page_icon=
 
 # --- Constants ---
 PRICING = {
-    "gpt-4o": {"input": 2.50, "output": 10.00},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},
-    "grok-4-0709": {"input": 3.00, "output": 15.00},
-    "grok-2-1212": {"input": 2.00, "output": 10.00},
-    "grok-3": {"input": 3.00, "output": 15.00},
+    # OpenAI Models (https://openai.com/api/pricing/)
+    "gpt-4o": {"input": 2.50, "output": 10.00, "provider": "OpenAI"},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60, "provider": "OpenAI"},
+    "gpt-4.1": {"input": 2.00, "output": 8.00, "provider": "OpenAI"},
+    "gpt-4.1-mini": {"input": 0.40, "output": 1.60, "provider": "OpenAI"},
+    "gpt-4.1-nano": {"input": 0.10, "output": 0.40, "provider": "OpenAI"},
+    "o1": {"input": 15.00, "output": 60.00, "provider": "OpenAI"},
+    "o1-mini": {"input": 1.10, "output": 4.40, "provider": "OpenAI"},
+    "o1-pro": {"input": 150.00, "output": 600.00, "provider": "OpenAI"},
+    "o3": {"input": 10.00, "output": 40.00, "provider": "OpenAI"},
+    "o3-mini": {"input": 1.10, "output": 4.40, "provider": "OpenAI"},
+    "o4-mini": {"input": 1.10, "output": 4.40, "provider": "OpenAI"},
+    # xAI Grok Models (https://docs.x.ai/docs/models)
+    "grok-4-1-fast-reasoning": {"input": 3.00, "output": 12.00, "provider": "xAI"},
+    "grok-4-0709": {"input": 3.00, "output": 15.00, "provider": "xAI"},
+    "grok-3": {"input": 3.00, "output": 15.00, "provider": "xAI"},
+    "grok-3-fast": {"input": 5.00, "output": 25.00, "provider": "xAI"},
+    "grok-3-mini": {"input": 0.30, "output": 0.50, "provider": "xAI"},
+    "grok-3-mini-fast": {"input": 0.10, "output": 0.40, "provider": "xAI"},
+    "grok-2-1212": {"input": 2.00, "output": 10.00, "provider": "xAI"},
+    "grok-2-vision-1212": {"input": 2.00, "output": 10.00, "provider": "xAI"},
+}
+
+# Model display names with descriptions
+OPENAI_MODELS = {
+    "GPT-4.1 (Latest)": "gpt-4.1",
+    "GPT-4.1 Mini (Balanced)": "gpt-4.1-mini",
+    "GPT-4.1 Nano (Fast & Cheap)": "gpt-4.1-nano",
+    "GPT-4o (Multimodal)": "gpt-4o",
+    "GPT-4o Mini (Budget)": "gpt-4o-mini",
+    "o1 (Reasoning)": "o1",
+    "o1 Mini (Reasoning Lite)": "o1-mini",
+    "o1 Pro (Reasoning Pro)": "o1-pro",
+    "o3 (Advanced Reasoning)": "o3",
+    "o3 Mini (Reasoning Budget)": "o3-mini",
+    "o4 Mini (Latest Reasoning)": "o4-mini",
+}
+
+XAI_MODELS = {
+    "Grok 4.1 Fast Reasoning [Best Value]": "grok-4-1-fast-reasoning",
+    "Grok 4 (Standard)": "grok-4-0709",
+    "Grok 3 (Standard)": "grok-3",
+    "Grok 3 Fast": "grok-3-fast",
+    "Grok 3 Mini (Budget)": "grok-3-mini",
+    "Grok 3 Mini Fast (Cheapest)": "grok-3-mini-fast",
+    "Grok 2 (Legacy)": "grok-2-1212",
+    "Grok 2 Vision (Legacy)": "grok-2-vision-1212",
 }
 
 SCENARIOS = {
@@ -32,6 +74,12 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "prompt" not in st.session_state:
     st.session_state.prompt = SCENARIOS["Rotating Sphere with Gas"]
+if "auto_play" not in st.session_state:
+    st.session_state.auto_play = True
+if "loop_animation" not in st.session_state:
+    st.session_state.loop_animation = True
+if "show_slider" not in st.session_state:
+    st.session_state.show_slider = True
 
 # --- Helpers ---
 def get_secret(key_name):
@@ -62,9 +110,67 @@ def check_password():
         return False
     return True
 
+def get_pricing_info(model_name):
+    """Get pricing info for a model with formatted display."""
+    if model_name in PRICING:
+        info = PRICING[model_name]
+        return {
+            "input": info["input"],
+            "output": info["output"],
+            "provider": info["provider"],
+            "model": model_name
+        }
+    return {
+        "input": 5.0,
+        "output": 15.0,
+        "provider": "Unknown",
+        "model": model_name
+    }
+
+def display_pricing_indicator(model_name):
+    """Display a visual pricing indicator for the selected model."""
+    info = get_pricing_info(model_name)
+    provider = info["provider"]
+    
+    if provider == "OpenAI":
+        provider_icon = "🟢"
+        provider_color = "green"
+    elif provider == "xAI":
+        provider_icon = "🔵"
+        provider_color = "blue"
+    else:
+        provider_icon = "⚪"
+        provider_color = "gray"
+    
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, {'#e8f5e9' if provider == 'OpenAI' else '#e3f2fd'} 0%, {'#c8e6c9' if provider == 'OpenAI' else '#bbdefb'} 100%);
+        border-radius: 10px;
+        padding: 12px;
+        margin: 10px 0;
+        border-left: 4px solid {'#4caf50' if provider == 'OpenAI' else '#2196f3'};
+    ">
+        <div style="font-weight: bold; margin-bottom: 8px;">
+            {provider_icon} {provider} Pricing
+        </div>
+        <div style="font-size: 0.85em;">
+            <div style="display: flex; justify-content: space-between; margin: 4px 0;">
+                <span>📥 Input:</span>
+                <span><strong>${info['input']:.2f}</strong> / 1M tokens</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin: 4px 0;">
+                <span>📤 Output:</span>
+                <span><strong>${info['output']:.2f}</strong> / 1M tokens</span>
+            </div>
+        </div>
+        <div style="font-size: 0.75em; color: #666; margin-top: 8px;">
+            Model: <code>{model_name}</code>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- Stronger Sandbox ---
 def execute_safe_code(code_str, global_vars):
-    # Restricted __import__
     blocked_modules = ['os', 'sys', 'subprocess', 'shutil', 'requests', 'socket',
                       'pickle', 'ctypes', 'multiprocessing', 'urllib', 'webbrowser']
     
@@ -73,7 +179,6 @@ def execute_safe_code(code_str, global_vars):
             raise ImportError(f"Importing '{name}' is forbidden for security reasons.")
         return __import__(name, globals, locals, fromlist, level)
 
-    # Safe builtins — remove the really dangerous ones
     if isinstance(__builtins__, dict):
         safe_builtins = __builtins__.copy()
     else:
@@ -94,10 +199,8 @@ def execute_safe_code(code_str, global_vars):
 # --- Improved Code Cleaning ---
 def clean_code(raw):
     lines = raw.splitlines()
-    # Skip opening fence
     if lines and lines[0].strip().startswith('```'):
         lines = lines[1:]
-    # Drop closing fence
     if lines and lines[-1].strip() == '```':
         lines = lines[:-1]
     return '\n'.join(lines).strip()
@@ -111,8 +214,9 @@ STRICT RULES (never break them):
 - Output ONLY raw Python code. No markdown, no ``` fences, no explanations.
 - Start with the imports: import numpy as np and import plotly.graph_objects as go
 - Pre-calculate exactly 60-90 frames and attach them to fig.frames
+- Each frame MUST have a unique 'name' attribute (e.g., name=f"frame_{i}")
 - Define the final figure as `fig = go.Figure(...)`
-- NEVER define updatemenus or play buttons — the app adds them automatically
+- NEVER define updatemenus, sliders, or play buttons — the app adds them automatically
 - ALWAYS set fixed axis ranges (e.g. scene.xaxis.range=[-10, 10]) — never use auto-scaling
 - Use heavy vectorization with np functions — never write out long lists manually
 - Keep code as short and efficient as possible
@@ -123,7 +227,7 @@ def call_llm(messages, key, url, model):
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.2,          # lower = much more reliable code
+        temperature=0.2,
         max_tokens=4096,
     )
     content = response.choices[0].message.content
@@ -157,20 +261,17 @@ def generate_simulation(prompt, key, url, model):
         fig_ok = 'fig' in dummy_globals and isinstance(dummy_globals['fig'], go.Figure)
 
         if success and fig_ok:
-            # Calculate accurate cost
             rates = PRICING.get(model, {"input": 5.0, "output": 15.0})
             if total_prompt_tokens > 0:
                 cost = (total_prompt_tokens / 1_000_000) * rates["input"] + \
                        (total_completion_tokens / 1_000_000) * rates["output"]
             else:
-                # Fallback approximation (very rare)
                 est_input = len(get_system_prompt() + prompt) / 4
                 est_output = len(raw_code) / 4
                 cost = (est_input / 1e6) * rates["input"] + (est_output / 1e6) * rates["output"]
             
-            return code, cost
+            return code, cost, total_prompt_tokens, total_completion_tokens
 
-        # Auto-correction feedback
         issues = []
         if not success:
             issues.append(f"Execution error: {error}")
@@ -192,6 +293,182 @@ def update_prompt():
     if sel != "Custom":
         st.session_state.prompt = SCENARIOS[sel]
 
+def add_animation_controls(fig, frame_dur, loop_animation, show_slider):
+    """Add play/pause buttons, restart, and optional slider to the figure."""
+    
+    num_frames = len(fig.frames) if hasattr(fig, 'frames') and fig.frames else 0
+    
+    play_args = dict(
+        frame=dict(duration=frame_dur, redraw=True),
+        fromcurrent=True,
+        transition=dict(duration=0),
+        mode="immediate"
+    )
+    
+    buttons = [
+        dict(
+            label="▶️ Play",
+            method="animate",
+            args=[None, play_args]
+        ),
+        dict(
+            label="⏸️ Pause",
+            method="animate",
+            args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate")]
+        ),
+        dict(
+            label="⏮️ Restart",
+            method="animate",
+            args=[[fig.frames[0].name if num_frames > 0 and fig.frames[0].name else "frame_0"],
+                  dict(frame=dict(duration=0, redraw=True), mode="immediate", transition=dict(duration=0))]
+        )
+    ]
+    
+    updatemenus = [dict(
+        type="buttons",
+        showactive=False,
+        y=1.08,
+        x=0,
+        xanchor="left",
+        yanchor="top",
+        pad=dict(t=0, r=10),
+        buttons=buttons,
+        direction="left"
+    )]
+    
+    sliders = None
+    if show_slider and num_frames > 0:
+        steps = []
+        for i, frame in enumerate(fig.frames):
+            frame_name = frame.name if frame.name else f"frame_{i}"
+            step = dict(
+                args=[[frame_name],
+                      dict(frame=dict(duration=0, redraw=True),
+                           mode="immediate",
+                           transition=dict(duration=0))],
+                method="animate",
+                label=str(i + 1)
+            )
+            steps.append(step)
+        
+        sliders = [dict(
+            active=0,
+            steps=steps,
+            x=0.0,
+            y=-0.02,
+            len=1.0,
+            xanchor="left",
+            yanchor="top",
+            pad=dict(t=40, b=10),
+            currentvalue=dict(
+                prefix="Frame: ",
+                visible=True,
+                xanchor="center",
+                font=dict(size=12)
+            ),
+            transition=dict(duration=0),
+            ticklen=4
+        )]
+    
+    fig.update_layout(
+        updatemenus=updatemenus,
+        sliders=sliders,
+        height=800,
+        margin=dict(l=0, r=0, t=40, b=60 if show_slider else 0),
+        scene=dict(aspectmode='cube')
+    )
+    
+    return fig, num_frames
+
+def generate_autoplay_loop_script(auto_play, loop_animation, frame_dur, num_frames):
+    """Generate JavaScript for auto-play and loop functionality."""
+    
+    script_parts = []
+    
+    if auto_play or loop_animation:
+        script_parts.append("""
+        <script>
+        (function() {
+            let animationInterval = null;
+            let isPlaying = false;
+            let currentFrame = 0;
+            const totalFrames = """ + str(num_frames) + """;
+            const frameDuration = """ + str(frame_dur) + """;
+            const shouldLoop = """ + str(loop_animation).lower() + """;
+            const shouldAutoPlay = """ + str(auto_play).lower() + """;
+            
+            function findPlotlyDiv() {
+                return document.querySelector('.js-plotly-plot');
+            }
+            
+            function clickPlayButton() {
+                const buttons = document.querySelectorAll('.updatemenu-button');
+                if (buttons.length > 0) {
+                    buttons[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return true;
+                }
+                return false;
+            }
+            
+            function clickRestartButton() {
+                const buttons = document.querySelectorAll('.updatemenu-button');
+                if (buttons.length >= 3) {
+                    buttons[2].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return true;
+                }
+                return false;
+            }
+            
+            function setupLoopListener() {
+                if (!shouldLoop) return;
+                
+                const plotDiv = findPlotlyDiv();
+                if (!plotDiv) return;
+                
+                if (plotDiv._loopListenerAdded) return;
+                plotDiv._loopListenerAdded = true;
+                
+                plotDiv.on('plotly_animated', function() {
+                    if (shouldLoop) {
+                        setTimeout(function() {
+                            clickRestartButton();
+                            setTimeout(function() {
+                                clickPlayButton();
+                            }, 100);
+                        }, 50);
+                    }
+                });
+            }
+            
+            function initAnimation() {
+                const plotDiv = findPlotlyDiv();
+                if (!plotDiv) {
+                    setTimeout(initAnimation, 200);
+                    return;
+                }
+                
+                setupLoopListener();
+                
+                if (shouldAutoPlay) {
+                    setTimeout(function() {
+                        clickPlayButton();
+                    }, 500);
+                }
+            }
+            
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', function() {
+                    setTimeout(initAnimation, 800);
+                });
+            } else {
+                setTimeout(initAnimation, 800);
+            }
+        })();
+        </script>
+        """)
+    
+    return ''.join(script_parts)
+
 # --- Main App ---
 def main_app():
     with st.sidebar:
@@ -206,42 +483,89 @@ def main_app():
         if provider == "xAI (Grok)":
             api_key = get_secret("xai_api_key")
             base_url = "https://api.x.ai/v1"
-            model_options = {
-                "Grok 4.1 Fast (Reasoning) [Best Value]": "grok-4-1-fast-reasoning",
-                "Grok 4 (Standard)": "grok-4-0709",
-                "Grok 2 (Legacy)": "grok-2-1212",
-                "Grok 3 (Legacy)": "grok-3"
-            }
-            choice = st.selectbox("Version", list(model_options.keys()))
-            model_name = model_options[choice]
+            choice = st.selectbox("Grok Model", list(XAI_MODELS.keys()))
+            model_name = XAI_MODELS[choice]
         else:
             api_key = get_secret("openai_api_key")
-            model_name = st.selectbox("Version", ["gpt-4o", "gpt-4o-mini"])
+            choice = st.selectbox("OpenAI Model", list(OPENAI_MODELS.keys()))
+            model_name = OPENAI_MODELS[choice]
             
         if not api_key:
             st.error(f"Missing API Key for {provider}")
+        
+        # Display pricing indicator for selected model
+        display_pricing_indicator(model_name)
 
         st.divider()
-        st.subheader("🎮 Animation")
+        st.subheader("🎮 Animation Controls")
+        
         speed = st.slider("Speed Factor", 10, 200, 50, 5)
         frame_dur = int(1000 / speed)
         st.caption(f"Frame duration: {frame_dur} ms")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.session_state.auto_play = st.checkbox(
+                "Auto-play",
+                value=st.session_state.auto_play,
+                help="Automatically start animation when loaded"
+            )
+        with col2:
+            st.session_state.loop_animation = st.checkbox(
+                "Loop",
+                value=st.session_state.loop_animation,
+                help="Continuously loop the animation"
+            )
+        
+        st.session_state.show_slider = st.checkbox(
+            "Show Frame Slider",
+            value=st.session_state.show_slider,
+            help="Display a slider to scrub through animation frames"
+        )
 
         st.divider()
-        with st.expander("💰 Cost Estimator", expanded=True):
+        with st.expander("💰 Cost Summary", expanded=True):
             total_cost = sum(item.get('cost', 0) for item in st.session_state.history)
-            st.write(f"**Session total:** ${total_cost:.5f}")
+            st.metric("Session Total", f"${total_cost:.5f}")
+            
             if st.session_state.history:
                 last = st.session_state.history[-1]
-                st.write(f"**Last run:** ${last['cost']:.5f} ({last['model']})")
+                st.markdown("---")
+                st.markdown("**Last Generation:**")
+                
+                last_info = get_pricing_info(last['model'])
+                provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🔵"
+                
+                st.markdown(f"{provider_icon} **{last['model']}**")
+                st.markdown(f"💵 Cost: **${last['cost']:.5f}**")
+                
+                if 'prompt_tokens' in last and last['prompt_tokens']:
+                    st.markdown(f"📥 Input: {last['prompt_tokens']:,} tokens")
+                    st.markdown(f"📤 Output: {last['completion_tokens']:,} tokens")
 
         st.divider()
         st.subheader("📜 Recent History")
         for i, item in enumerate(reversed(st.session_state.history[:5])):
-            if st.button(f"↩️ Load #{len(st.session_state.history)-i}: {item['model']}", key=f"hist_{i}"):
+            hist_info = get_pricing_info(item['model'])
+            hist_icon = "🟢" if hist_info['provider'] == "OpenAI" else "🔵"
+            if st.button(f"{hist_icon} #{len(st.session_state.history)-i}: {item['model'][:15]}...", key=f"hist_{i}"):
                 st.session_state.current_code = item["code"]
                 st.session_state.prompt = item["prompt"]
                 st.rerun()
+        
+        st.divider()
+        with st.expander("📊 Pricing Reference", expanded=False):
+            st.markdown("**OpenAI Models** 🟢")
+            for display_name, model_id in OPENAI_MODELS.items():
+                info = PRICING.get(model_id, {})
+                st.caption(f"`{model_id}`: ${info.get('input', 'N/A')}/{info.get('output', 'N/A')}")
+            
+            st.markdown("**xAI Grok Models** 🔵")
+            for display_name, model_id in XAI_MODELS.items():
+                info = PRICING.get(model_id, {})
+                st.caption(f"`{model_id}`: ${info.get('input', 'N/A')}/{info.get('output', 'N/A')}")
+            
+            st.caption("_Prices shown as $/1M tokens (input/output)_")
 
     st.title("⚛️ Generative Physics Modeler")
 
@@ -250,7 +574,7 @@ def main_app():
         st.selectbox("📚 Scenarios", list(SCENARIOS.keys()), key="scenario_selector", on_change=update_prompt)
     
     with c2:
-        pass  # spacing
+        pass
 
     prompt = st.text_area("Physics Description", height=110, key="prompt")
 
@@ -258,14 +582,16 @@ def main_app():
         with st.status(f"Generating with {model_name}...", expanded=True) as status:
             st.write("🧠 Asking the model...")
             try:
-                code, cost = generate_simulation(prompt, api_key, base_url, model_name)
+                code, cost, p_tokens, c_tokens = generate_simulation(prompt, api_key, base_url, model_name)
                 
                 st.session_state.current_code = code
                 st.session_state.history.append({
                     "code": code,
                     "prompt": prompt,
                     "model": model_name,
-                    "cost": cost
+                    "cost": cost,
+                    "prompt_tokens": p_tokens,
+                    "completion_tokens": c_tokens
                 })
                 
                 status.update(label="Success!", state="complete")
@@ -277,14 +603,30 @@ def main_app():
     # --- Display current simulation ---
     if st.session_state.get("current_code"):
         with st.expander("🔍 View Generated Code & Details", expanded=False):
-            tab1, tab2 = st.tabs(["Python Code", "Cost"])
+            tab1, tab2 = st.tabs(["Python Code", "Cost Breakdown"])
             with tab1:
                 st.code(st.session_state.current_code, language="python")
                 st.download_button("📥 Download .py", st.session_state.current_code, "simulation.py")
             with tab2:
                 if st.session_state.history:
-                    last_cost = st.session_state.history[-1]["cost"]
-                    st.metric("Actual Cost", f"${last_cost:.5f}")
+                    last = st.session_state.history[-1]
+                    last_info = get_pricing_info(last['model'])
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Cost", f"${last['cost']:.5f}")
+                    with col2:
+                        if last.get('prompt_tokens'):
+                            st.metric("Input Tokens", f"{last['prompt_tokens']:,}")
+                    with col3:
+                        if last.get('completion_tokens'):
+                            st.metric("Output Tokens", f"{last['completion_tokens']:,}")
+                    
+                    st.markdown("---")
+                    provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🔵"
+                    st.markdown(f"**Provider:** {provider_icon} {last_info['provider']}")
+                    st.markdown(f"**Model:** `{last['model']}`")
+                    st.markdown(f"**Rates:** ${last_info['input']:.2f} input / ${last_info['output']:.2f} output per 1M tokens")
 
         exec_globals = {"np": np, "go": go}
         success, error = execute_safe_code(st.session_state.current_code, exec_globals)
@@ -292,23 +634,40 @@ def main_app():
         if success and "fig" in exec_globals:
             fig = exec_globals["fig"]
             
-            # Inject Play/Pause buttons + consistent styling
-            fig.update_layout(
-                updatemenus=[dict(
-                    type="buttons",
-                    showactive=False,
-                    y=1.05, x=0, xanchor="left", yanchor="top",
-                    buttons=[
-                        dict(label="▶️ Play", method="animate", args=[None, dict(frame=dict(duration=frame_dur, redraw=True), fromcurrent=True)]),
-                        dict(label="⏸️ Pause", method="animate", args=[[None], dict(mode="immediate")])
-                    ]
-                )],
-                height=800,
-                margin=dict(l=0, r=0, t=0, b=0),
-                scene=dict(aspectmode='cube')
+            fig, num_frames = add_animation_controls(
+                fig,
+                frame_dur,
+                st.session_state.loop_animation,
+                st.session_state.show_slider
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            if num_frames > 0:
+                status_col1, status_col2, status_col3 = st.columns([1, 1, 2])
+                with status_col1:
+                    st.metric("Total Frames", num_frames)
+                with status_col2:
+                    duration_sec = (num_frames * frame_dur) / 1000
+                    st.metric("Duration", f"{duration_sec:.1f}s")
+                with status_col3:
+                    status_items = []
+                    if st.session_state.auto_play:
+                        status_items.append("🔄 Auto-play ON")
+                    if st.session_state.loop_animation:
+                        status_items.append("🔁 Loop ON")
+                    if status_items:
+                        st.info(" | ".join(status_items))
+            
+            st.plotly_chart(fig, use_container_width=True, key="main_animation")
+            
+            if st.session_state.auto_play or st.session_state.loop_animation:
+                autoplay_script = generate_autoplay_loop_script(
+                    st.session_state.auto_play,
+                    st.session_state.loop_animation,
+                    frame_dur,
+                    num_frames
+                )
+                components.html(autoplay_script, height=0)
+                
         elif not success:
             st.error(f"⚠️ Runtime error in generated code:\n{error}")
         else:
