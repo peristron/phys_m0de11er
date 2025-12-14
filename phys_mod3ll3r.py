@@ -63,25 +63,31 @@ def check_password():
         return False
     return True
 
-# --- Strong Sandbox ---
-def execute_safe_code(code_str, globals_dict):
-    blocked = ['os', 'sys', 'subprocess', 'shutil', 'requests', 'socket', 'pickle', 'ctypes', 'urllib']
-    def restricted_import(name, *args, **kwargs):
-        if name.split('.')[0] in blocked:
-            raise ImportError(f"Blocked: {name}")
-        return __import__(name, *args, **kwargs)
+# --- strong sandbx
+    def execute_safe_code(code_str, globals_dict):
+        blocked = ['os', 'sys', 'subprocess', 'shutil', 'requests', 'socket', 'pickle', 'ctypes', 'urllib', 'pathlib', 'webbrowser']
+        
+        def restricted_import(name, *args, **kwargs):
+            if name.split('.')[0] in blocked:
+                raise ImportError(f"Import blocked: {name}")
+            return __import__(name, *args, **kwargs)
 
-    safe_builtins = __builtins__.__dict__.copy() if isinstance(__builtins__, dict) else __builtins__.copy()
-    for dangerous in ['eval', 'exec', 'open', 'compile']:
-        safe_builtins.pop(dangerous, None)
-    safe_builtins['__import__'] = restricted_import
+        # FIXED: Safe handling for both dict and module types
+        if isinstance(__builtins__, dict):
+            safe_builtins = __builtins__.copy()
+        else:
+            safe_builtins = getattr(__builtins__, "__dict__", {}).copy() or vars(__builtins__).copy()
 
-    globals_dict['__builtins__'] = safe_builtins
-    try:
-        exec(code_str, globals_dict)
-        return True, None
-    except Exception as e:
-        return False, str(e)
+        for dangerous in ['eval', 'exec', 'open', 'compile', '__import__']:
+            safe_builtins.pop(dangerous, None)
+        safe_builtins['__import__'] = restricted_import
+
+        globals_dict['__builtins__'] = safe_builtins
+        try:
+            exec(code_str, globals_dict)
+            return True, None
+        except Exception as e:
+            return False, str(e)
 
 # --- Code Cleaning ---
 def clean_code(raw):
