@@ -33,6 +33,9 @@ PRICING = {
     "grok-3-mini-fast": {"input": 0.10, "output": 0.40, "provider": "xAI"},
     "grok-2-1212": {"input": 2.00, "output": 10.00, "provider": "xAI"},
     "grok-2-vision-1212": {"input": 2.00, "output": 10.00, "provider": "xAI"},
+    # DeepSeek Models (https://api-docs.deepseek.com/quick_start/pricing/)
+    "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "provider": "DeepSeek"},
+    "deepseek-v4-pro": {"input": 0.435, "output": 0.87, "provider": "DeepSeek"},
 }
 
 # Model display names with descriptions
@@ -59,6 +62,11 @@ XAI_MODELS = {
     "Grok 3 Mini Fast (Cheapest)": "grok-3-mini-fast",
     "Grok 2 (Legacy)": "grok-2-1212",
     "Grok 2 Vision (Legacy)": "grok-2-vision-1212",
+}
+
+DEEPSEEK_MODELS = {
+    "DeepSeek V4 Flash (Fast & Cheap)": "deepseek-v4-flash",
+    "DeepSeek V4 Pro (Higher Capability)": "deepseek-v4-pro",
 }
 
 SCENARIOS = {
@@ -97,6 +105,10 @@ if "show_slider" not in st.session_state:
     st.session_state.show_slider = True
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "GenAI Physics Generator"
+if "bromine_auto_play" not in st.session_state:
+    st.session_state.bromine_auto_play = False
+if "bromine_loop_animation" not in st.session_state:
+    st.session_state.bromine_loop_animation = True
 
 # --- Helpers ---
 def get_secret(key_name):
@@ -155,17 +167,32 @@ def display_pricing_indicator(model_name):
     elif provider == "xAI":
         provider_icon = "🔵"
         provider_color = "blue"
+    elif provider == "DeepSeek":
+        provider_icon = "🟣"
+        provider_color = "purple"
     else:
         provider_icon = "⚪"
         provider_color = "gray"
+
+    bg_start = "#e8f5e9"
+    bg_end = "#c8e6c9"
+    border_color = "#4caf50"
+    if provider == "xAI":
+        bg_start = "#e3f2fd"
+        bg_end = "#bbdefb"
+        border_color = "#2196f3"
+    elif provider == "DeepSeek":
+        bg_start = "#f3e8ff"
+        bg_end = "#ddd6fe"
+        border_color = "#7c3aed"
     
     st.markdown(f"""
     <div style="
-        background: linear-gradient(135deg, {'#e8f5e9' if provider == 'OpenAI' else '#e3f2fd'} 0%, {'#c8e6c9' if provider == 'OpenAI' else '#bbdefb'} 100%);
+        background: linear-gradient(135deg, {bg_start} 0%, {bg_end} 100%);
         border-radius: 10px;
         padding: 12px;
         margin: 10px 0;
-        border-left: 4px solid {'#4caf50' if provider == 'OpenAI' else '#2196f3'};
+        border-left: 4px solid {border_color};
     ">
         <div style="font-weight: bold; margin-bottom: 8px;">
             {provider_icon} {provider} Pricing
@@ -858,6 +885,7 @@ def render_bromine_release_app():
         temperature_k = st.slider("Temperature", 250, 350, 298, 1)
         particle_count = st.slider("Visible tracer particles", 80, 800, 320, 20)
         frames_count = st.slider("Animation frames", 60, 90, 75, 5)
+        bromine_speed = st.slider("Animation speed", 10, 200, 50, 5)
         wall_accommodation = st.slider(
             "Wall thermalization",
             0.0,
@@ -866,6 +894,17 @@ def render_bromine_release_app():
             0.05,
             help="Higher values randomize particle velocity more strongly after chamber-wall encounters.",
         )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.session_state.bromine_auto_play = st.checkbox(
+                "Auto-play model",
+                value=st.session_state.bromine_auto_play,
+            )
+        with col2:
+            st.session_state.bromine_loop_animation = st.checkbox(
+                "Loop model",
+                value=st.session_state.bromine_loop_animation,
+            )
         seed = st.number_input("Deterministic seed", min_value=1, max_value=9999, value=42, step=1)
 
     chamber_radius_m = chamber_radius_cm / 100
@@ -898,8 +937,16 @@ def render_bromine_release_app():
 
     st.subheader("2D Top-Down Chamber Model")
     fig = apply_dark_theme(fig)
-    fig, num_frames = add_animation_controls(fig, frame_dur=35, show_slider=True)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
+    frame_dur = int(1000 / bromine_speed)
+    fig, num_frames = add_animation_controls(fig, frame_dur=frame_dur, show_slider=True)
+    render_plotly_with_autoplay(
+        fig,
+        frame_dur,
+        st.session_state.bromine_auto_play,
+        st.session_state.bromine_loop_animation,
+        num_frames,
+        height=720,
+    )
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -979,7 +1026,7 @@ def main_app():
     with st.sidebar:
         st.title("⚙️ Settings")
         
-        provider = st.radio("Model Source", ["xAI (Grok)", "OpenAI"], label_visibility="collapsed")
+        provider = st.radio("Model Source", ["xAI (Grok)", "OpenAI", "DeepSeek"], label_visibility="collapsed")
         
         api_key = None
         base_url = None
@@ -990,6 +1037,11 @@ def main_app():
             base_url = "https://api.x.ai/v1"
             choice = st.selectbox("Grok Model", list(XAI_MODELS.keys()))
             model_name = XAI_MODELS[choice]
+        elif provider == "DeepSeek":
+            api_key = get_secret("deepseek_api_key")
+            base_url = "https://api.deepseek.com"
+            choice = st.selectbox("DeepSeek Model", list(DEEPSEEK_MODELS.keys()))
+            model_name = DEEPSEEK_MODELS[choice]
         else:
             api_key = get_secret("openai_api_key")
             choice = st.selectbox("OpenAI Model", list(OPENAI_MODELS.keys()))
@@ -1039,7 +1091,7 @@ def main_app():
                 st.markdown("**Last Generation:**")
                 
                 last_info = get_pricing_info(last['model'])
-                provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🔵"
+                provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🟣" if last_info['provider'] == "DeepSeek" else "🔵"
                 
                 st.markdown(f"{provider_icon} **{last['model']}**")
                 st.markdown(f"💵 Cost: **${last['cost']:.5f}**")
@@ -1052,7 +1104,7 @@ def main_app():
         st.subheader("📜 Recent History")
         for i, item in enumerate(reversed(st.session_state.history[:5])):
             hist_info = get_pricing_info(item['model'])
-            hist_icon = "🟢" if hist_info['provider'] == "OpenAI" else "🔵"
+            hist_icon = "🟢" if hist_info['provider'] == "OpenAI" else "🟣" if hist_info['provider'] == "DeepSeek" else "🔵"
             if st.button(f"{hist_icon} #{len(st.session_state.history)-i}: {item['model'][:15]}...", key=f"hist_{i}"):
                 st.session_state.current_code = item["code"]
                 st.session_state.prompt = item["prompt"]
@@ -1067,6 +1119,11 @@ def main_app():
             
             st.markdown("**xAI Grok Models** 🔵")
             for display_name, model_id in XAI_MODELS.items():
+                info = PRICING.get(model_id, {})
+                st.caption(f"`{model_id}`: ${info.get('input', 'N/A')}/{info.get('output', 'N/A')}")
+
+            st.markdown("**DeepSeek Models** 🟣")
+            for display_name, model_id in DEEPSEEK_MODELS.items():
                 info = PRICING.get(model_id, {})
                 st.caption(f"`{model_id}`: ${info.get('input', 'N/A')}/{info.get('output', 'N/A')}")
             
@@ -1128,7 +1185,7 @@ def main_app():
                             st.metric("Output Tokens", f"{last['completion_tokens']:,}")
                     
                     st.markdown("---")
-                    provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🔵"
+                    provider_icon = "🟢" if last_info['provider'] == "OpenAI" else "🟣" if last_info['provider'] == "DeepSeek" else "🔵"
                     st.markdown(f"**Provider:** {provider_icon} {last_info['provider']}")
                     st.markdown(f"**Model:** `{last['model']}`")
                     st.markdown(f"**Rates:** ${last_info['input']:.2f} input / ${last_info['output']:.2f} output per 1M tokens")
