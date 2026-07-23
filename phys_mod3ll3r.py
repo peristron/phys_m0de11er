@@ -1092,7 +1092,7 @@ def render_plotly_with_autoplay(fig, frame_dur, auto_play, loop_animation, num_f
 
 def render_bromine_release_app():
     st.title("Bromine Vapor Release Model")
-    st.caption("Deterministic 2D model based on the static-chamber bromine release paper.")
+    st.caption("Deterministic 2D/3D model based on the static-chamber bromine release paper.")
 
     with st.sidebar:
         st.divider()
@@ -1154,9 +1154,32 @@ def render_bromine_release_app():
     with g_col3:
         st.metric("Tangential release speed", f"{metrics['tangential_speed']:.1f} m/s")
 
+    st.markdown(
+        """
+        <div style="
+            border-left: 5px solid #f97316;
+            background: rgba(249, 115, 22, 0.12);
+            padding: 16px 18px;
+            margin: 12px 0 18px 0;
+            border-radius: 6px;
+        ">
+            <div style="font-size: 1.15rem; font-weight: 700; margin-bottom: 6px;">
+                Core prediction: high equivalent-g does not prevent rapid gas equilibration.
+            </div>
+            <div style="font-size: 0.96rem;">
+                The spinning vial gives the released bromine vapor initial tangential momentum, but the outer chamber is static.
+                Once the gas is released into the evacuated chamber, thermal molecular motion and pressure-driven expansion
+                carry it into the available volume on a chamber-crossing timescale.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.info(
-        "Here, equivalent gravity means the local centrifugal acceleration at the vial radius, "
-        "`a = omega² r`, divided by standard Earth gravity. It is useful for intuition, but the paper's point is that high g does not imply gas confinement."
+        "Here, equivalent gravity means the local centrifugal pseudo-acceleration at the vial radius, "
+        "`a = omega² r`, divided by standard Earth gravity. It is useful for intuition precisely because it highlights the misconception: "
+        "even thousands of g do not act like a confining wall for gas molecules released into a static vacuum chamber."
     )
 
     st.subheader(f"{visualization_mode} Chamber Model")
@@ -1197,6 +1220,10 @@ def render_bromine_release_app():
     with st.expander("Paper Equations and Interpretation", expanded=True):
         st.markdown(
             f"""
+            **Central claim**
+
+            The centrifuge creates a large local pseudo-acceleration while the vial is rotating, but that does not stop molecular gas from rapidly occupying available evacuated volume after release. The post-release chamber is static, so the final sustained state is not a centrifugal barometric distribution.
+
             **Thermal crossing time**
 
             `t_cross ≈ L / v_mean`
@@ -1211,11 +1238,15 @@ def render_bromine_release_app():
 
             At `RPM = {rpm:,}` and `r = {rotor_radius_m:.3f} m`, this gives `{metrics['acceleration']:,.0f} m/s²`, or about `{metrics['g_equiv']:,.0f} g`.
 
+            This number describes the rotating-frame pseudo-acceleration at the vial radius. It does not describe a real inward or outward chamber wall, and it does not by itself determine whether gas will fill the surrounding vacuum.
+
             **Ideal co-rotating density comparison**
 
             `n(r) / n(r0) = exp(M * omega² * (r² - r0²) / (2RT))`
 
             For `r0 = {rotor_radius_m / 2:.3f} m` and `r = {rotor_radius_m:.3f} m`, the exponent is `{metrics['density_exponent']:.3f}`, giving a ratio of `{metrics['density_ratio']:.2f}x`.
+
+            This comparison is intentionally idealized. It asks what would happen if the gas and enclosure were fully co-rotating. The actual experiment releases gas into a static chamber, so this is a ceiling/contrast case, not the final post-release equilibrium.
 
             **Post-release pressure and mean free path**
 
@@ -1230,7 +1261,9 @@ def render_bromine_release_app():
     with st.expander("Model Limits", expanded=False):
         st.markdown(
             """
-            This is a visual deterministic tracer model, not a full CFD solver. It shows the paper's main qualitative idea: initial tangential momentum can curve the plume, while thermal speeds rapidly spread the gas across the static chamber. The radial density chart is based on visual tracer particles, so it should be read as a teaching aid rather than calibrated absorbance data.
+            This is a visual deterministic tracer model, not a full CFD solver. It shows the paper's main qualitative idea: initial tangential momentum can curve the plume, while thermal speeds rapidly spread the gas across the static chamber.
+
+            The real post-release gas may quickly become collisional at the representative final pressure, so detailed plume shape, viscosity, pressure waves, boundary layers, and optical absorbance are simplified here. The particle animation should therefore be read as a teaching model for the misconception tested by the paper: large equivalent-g is not the same thing as molecular gas confinement.
             """
         )
 
