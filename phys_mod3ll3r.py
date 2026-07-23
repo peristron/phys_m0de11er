@@ -291,6 +291,47 @@ def reflect_particles_in_circle(positions, velocities, radius):
     velocities[outside] = velocities[outside] - 2 * normal_speed[:, None] * normals
     return positions, velocities
 
+def reflect_particles_in_sphere(positions, velocities, radius):
+    radii = np.linalg.norm(positions, axis=1)
+    outside = radii > radius
+    if not np.any(outside):
+        return positions, velocities
+
+    normals = positions[outside] / radii[outside, None]
+    positions[outside] = normals * (2 * radius - radii[outside])[:, None]
+    normal_speed = np.sum(velocities[outside] * normals, axis=1)
+    velocities[outside] = velocities[outside] - 2 * normal_speed[:, None] * normals
+    return positions, velocities
+
+def make_sphere_wireframe(radius, line_color="#6b7280"):
+    theta = np.linspace(0, 2 * np.pi, 90)
+    phi_values = np.linspace(0.2 * np.pi, 0.8 * np.pi, 5)
+    meridian_values = np.linspace(0, 2 * np.pi, 9, endpoint=False)
+    x_lines = []
+    y_lines = []
+    z_lines = []
+
+    for phi in phi_values:
+        x_lines.extend((radius * np.sin(phi) * np.cos(theta)).tolist() + [None])
+        y_lines.extend((radius * np.sin(phi) * np.sin(theta)).tolist() + [None])
+        z_lines.extend((np.full_like(theta, radius * np.cos(phi))).tolist() + [None])
+
+    phi = np.linspace(0, np.pi, 90)
+    for meridian in meridian_values:
+        x_lines.extend((radius * np.sin(phi) * np.cos(meridian)).tolist() + [None])
+        y_lines.extend((radius * np.sin(phi) * np.sin(meridian)).tolist() + [None])
+        z_lines.extend((radius * np.cos(phi)).tolist() + [None])
+
+    return go.Scatter3d(
+        x=x_lines,
+        y=y_lines,
+        z=z_lines,
+        mode="lines",
+        line=dict(color=line_color, width=2),
+        opacity=0.45,
+        name="Static chamber",
+    )
+
 def simulate_bromine_release_2d(
     chamber_radius_m,
     rotor_radius_m,
@@ -407,6 +448,183 @@ def simulate_bromine_release_2d(
         title="Radial Tracer Density",
         xaxis_title="Radius (m)",
         yaxis_title="Tracer density per m²",
+        height=340,
+        margin=dict(l=20, r=20, t=50, b=40),
+    )
+
+    acceleration, g_equiv = centrifugal_acceleration_g(rpm, rotor_radius_m)
+    exponent, density_ratio = co_rotating_density_ratio(
+        rpm,
+        max(0.001, rotor_radius_m / 2),
+        rotor_radius_m,
+        temperature_k,
+    )
+    final_pressure = estimate_final_pressure_torr(10, 1000)
+    mean_free_path = estimate_mean_free_path_m(final_pressure, temperature_k)
+
+    metrics = {
+        "omega": omega,
+        "mean_speed": mean_speed,
+        "thermal_std": thermal_std,
+        "t_cross_ms": t_cross * 1000,
+        "t_end_ms": t_end * 1000,
+        "tangential_speed": tangential_speed,
+        "acceleration": acceleration,
+        "g_equiv": g_equiv,
+        "density_exponent": exponent,
+        "density_ratio": density_ratio,
+        "final_pressure_torr": final_pressure,
+        "mean_free_path_m": mean_free_path,
+        "angular_memory_start": angular_memory[0],
+        "angular_memory_end": angular_memory[-1],
+    }
+    return fig, density_fig, metrics
+
+def simulate_bromine_release_3d(
+    chamber_radius_m,
+    rotor_radius_m,
+    rpm,
+    temperature_k,
+    particle_count,
+    frames_count,
+    wall_accommodation,
+    seed,
+):
+    rng = np.random.default_rng(seed)
+    omega = rpm_to_omega(rpm)
+    mean_speed = bromine_mean_speed(temperature_k)
+    thermal_std = np.sqrt(GAS_CONSTANT * temperature_k / BROMINE_MOLAR_MASS)
+    tangential_speed = omega * rotor_radius_m
+    t_cross = chamber_radius_m / mean_speed
+    t_end = max(0.004, 4 * t_cross)
+    times = np.linspace(0, t_end, frames_count)
+    dt = times[1] - times[0] if frames_count > 1 else t_end
+
+    release_spread = max(0.002, 0.04 * chamber_radius_m)
+    positions = rng.normal(0, release_spread, size=(particle_count, 3))
+    positions[:, 0] += rotor_radius_m
+    velocities = rng.normal(0, thermal_std, size=(particle_count, 3))
+    velocities[:, 1] += tangential_speed
+
+    rotor_theta = np.linspace(0, 2 * np.pi, 160)
+    rotor_x = rotor_radius_m * np.cos(rotor_theta)
+    rotor_y = rotor_radius_m * np.sin(rotor_theta)
+    rotor_z = np.zeros_like(rotor_theta)
+    chamber_wire = make_sphere_wireframe(chamber_radius_m)
+
+    frames = []
+    saved_positions = []
+    angular_memory = []
+    for frame_i, t in enumerate(times):
+        if frame_i > 0:
+            positions = positions + velocities * dt
+            positions, velocities = reflect_particles_in_sphere(positions, velocities, chamber_radius_m)
+
+            hit_wall = np.linalg.norm(positions, axis=1) > 0.98 * chamber_radius_m
+            if np.any(hit_wall) and wall_accommodation > 0:
+                velocities[hit_wall] *= (1 - wall_accommodation)
+                randomized = rng.normal(0, thermal_std, size=(hit_wall.sum(), 3))
+                velocities[hit_wall] += wall_accommodation * randomized
+
+        saved_positions.append(positions.copy())
+        radii = np.linalg.norm(positions[:, :2], axis=1)
+        tangential = np.divide(
+            positions[:, 0] * velocities[:, 1] - positions[:, 1] * velocities[:, 0],
+            np.maximum(radii, 1e-9),
+        )
+        angular_memory.append(float(np.mean(tangential)))
+
+        plume_angle = omega * t
+        vial_x = rotor_radius_m * np.cos(plume_angle)
+        vial_y = rotor_radius_m * np.sin(plume_angle)
+        vial_z = 0
+        tangent_x = -np.sin(plume_angle)
+        tangent_y = np.cos(plume_angle)
+        tangent_len = 0.28 * chamber_radius_m
+        particle_radii = np.linalg.norm(positions, axis=1)
+
+        frames.append(go.Frame(
+            name=f"frame_{frame_i}",
+            data=[
+                chamber_wire,
+                go.Scatter3d(
+                    x=rotor_x,
+                    y=rotor_y,
+                    z=rotor_z,
+                    mode="lines",
+                    line=dict(color="#374151", width=3, dash="dot"),
+                    name="Rotor path",
+                ),
+                go.Scatter3d(
+                    x=positions[:, 0],
+                    y=positions[:, 1],
+                    z=positions[:, 2],
+                    mode="markers",
+                    marker=dict(size=4, color=particle_radii, colorscale="Oranges", cmin=0, cmax=chamber_radius_m, opacity=0.72),
+                    name="Bromine tracers",
+                ),
+                go.Scatter3d(
+                    x=[0, vial_x],
+                    y=[0, vial_y],
+                    z=[0, vial_z],
+                    mode="lines",
+                    line=dict(color="#60a5fa", width=6),
+                    name="Rotor arm",
+                ),
+                go.Scatter3d(
+                    x=[vial_x],
+                    y=[vial_y],
+                    z=[vial_z],
+                    mode="markers",
+                    marker=dict(size=7, color="#f97316"),
+                    name="Opened vial",
+                ),
+                go.Scatter3d(
+                    x=[vial_x, vial_x + tangent_x * tangent_len],
+                    y=[vial_y, vial_y + tangent_y * tangent_len],
+                    z=[vial_z, vial_z],
+                    mode="lines",
+                    line=dict(color="#facc15", width=7),
+                    name="Tangential release",
+                ),
+            ],
+            layout=go.Layout(title_text=f"3D bromine release, t = {t * 1000:.2f} ms"),
+        ))
+
+    fig = go.Figure(
+        data=frames[0].data,
+        frames=frames,
+        layout=go.Layout(
+            title="3D Bromine Vapor Release into a Static Chamber",
+            scene=dict(
+                xaxis=dict(range=[-chamber_radius_m * 1.1, chamber_radius_m * 1.1], title="x (m)"),
+                yaxis=dict(range=[-chamber_radius_m * 1.1, chamber_radius_m * 1.1], title="y (m)"),
+                zaxis=dict(range=[-chamber_radius_m * 1.1, chamber_radius_m * 1.1], title="z (m)"),
+                aspectmode="cube",
+            ),
+            showlegend=True,
+            height=720,
+            margin=dict(l=0, r=0, t=60, b=30),
+        )
+    )
+
+    initial_radii = np.linalg.norm(saved_positions[0], axis=1)
+    final_radii = np.linalg.norm(saved_positions[-1], axis=1)
+    bins = np.linspace(0, chamber_radius_m, 12)
+    initial_hist, _ = np.histogram(initial_radii, bins=bins)
+    final_hist, _ = np.histogram(final_radii, bins=bins)
+    shell_volumes = (4 / 3) * np.pi * (bins[1:] ** 3 - bins[:-1] ** 3)
+    initial_density = initial_hist / shell_volumes
+    final_density = final_hist / shell_volumes
+    bin_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    density_fig = go.Figure()
+    density_fig.add_trace(go.Scatter(x=bin_centers, y=initial_density, mode="lines+markers", name="At release"))
+    density_fig.add_trace(go.Scatter(x=bin_centers, y=final_density, mode="lines+markers", name="After expansion"))
+    density_fig.update_layout(
+        title="Radial Tracer Density",
+        xaxis_title="Radius (m)",
+        yaxis_title="Tracer density per m³",
         height=340,
         margin=dict(l=20, r=20, t=50, b=40),
     )
@@ -879,6 +1097,11 @@ def render_bromine_release_app():
     with st.sidebar:
         st.divider()
         st.subheader("Bromine Model Controls")
+        visualization_mode = st.radio(
+            "Visualization",
+            ["2D Top-Down", "3D Particle Chamber"],
+            horizontal=False,
+        )
         chamber_radius_cm = st.slider("Chamber radius", 5.0, 20.0, 10.0, 0.5, help="Radius of the static evacuated chamber.")
         rotor_radius_cm = st.slider("Rotor/vial radius", 1.0, chamber_radius_cm * 0.95, min(10.0, chamber_radius_cm * 0.8), 0.5)
         rpm = st.slider("Centrifuge speed", 0, 15000, 10000, 250)
@@ -910,7 +1133,8 @@ def render_bromine_release_app():
     chamber_radius_m = chamber_radius_cm / 100
     rotor_radius_m = rotor_radius_cm / 100
 
-    fig, density_fig, metrics = simulate_bromine_release_2d(
+    simulator = simulate_bromine_release_3d if visualization_mode == "3D Particle Chamber" else simulate_bromine_release_2d
+    fig, density_fig, metrics = simulator(
         chamber_radius_m=chamber_radius_m,
         rotor_radius_m=rotor_radius_m,
         rpm=rpm,
@@ -935,7 +1159,7 @@ def render_bromine_release_app():
         "`a = omega² r`, divided by standard Earth gravity. It is useful for intuition, but the paper's point is that high g does not imply gas confinement."
     )
 
-    st.subheader("2D Top-Down Chamber Model")
+    st.subheader(f"{visualization_mode} Chamber Model")
     fig = apply_dark_theme(fig)
     frame_dur = int(1000 / bromine_speed)
     fig, num_frames = add_animation_controls(fig, frame_dur=frame_dur, show_slider=True)
