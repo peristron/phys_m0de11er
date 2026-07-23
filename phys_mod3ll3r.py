@@ -1283,7 +1283,9 @@ def main_app():
     with st.sidebar:
         st.title("⚙️ Settings")
         
-        provider = st.radio("Model Source", ["xAI (Grok)", "OpenAI", "DeepSeek"], label_visibility="collapsed")
+        #>>>>>>>>>>>>>>>>
+        provider = st.radio("Model Source", ["DeepSeek", "xAI (Grok)", "OpenAI"], label_visibility="collapsed")
+#<<<<<<<<<<<<<<<<
         
         api_key = None
         base_url = None
