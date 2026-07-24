@@ -385,7 +385,7 @@ def floor_plane_surface(size, floor_z):
         hoverinfo="skip",
     )
 
-def make_terminator_geometry_figure(
+def terminator_geometry_snapshot(
     sphere_radius,
     light_distance,
     light_height,
@@ -393,7 +393,6 @@ def make_terminator_geometry_figure(
     axis_tilt_deg,
     axis_azimuth_deg,
     light_model,
-    show_hot_wire_fan,
 ):
     light_pos = np.array([-light_distance, 0.0, light_height - sphere_center_height])
     light_distance_from_center = np.linalg.norm(light_pos)
@@ -402,7 +401,6 @@ def make_terminator_geometry_figure(
         light_distance_from_center = np.linalg.norm(light_pos)
 
     center_to_light = normalize_vector(light_pos)
-    incident_ray = -center_to_light
     floor_normal = np.array([0.0, 0.0, 1.0])
     tilt = np.deg2rad(axis_tilt_deg)
     azimuth = np.deg2rad(axis_azimuth_deg)
@@ -424,10 +422,64 @@ def make_terminator_geometry_figure(
 
     terminator_points = circle_points(terminator_center, center_to_light, terminator_radius)
     equator_points = circle_points(np.zeros(3), spin_axis, sphere_radius * 1.004)
+    axis_points = np.column_stack((-spin_axis * sphere_radius * 1.45, spin_axis * sphere_radius * 1.45))
+
+    plane_floor_angle = np.rad2deg(np.arccos(np.clip(abs(np.dot(center_to_light, floor_normal)), 0, 1)))
+    axis_plane_angle = np.rad2deg(np.arcsin(np.clip(abs(np.dot(spin_axis, center_to_light)), 0, 1)))
+    equator_terminator_angle = np.rad2deg(np.arccos(np.clip(abs(np.dot(spin_axis, center_to_light)), 0, 1)))
+    light_elevation_angle = np.rad2deg(np.arcsin(np.clip(center_to_light[2], -1, 1)))
+
+    metrics = {
+        "light_distance_from_center": light_distance_from_center,
+        "light_elevation_angle": light_elevation_angle,
+        "terminator_floor_angle": plane_floor_angle,
+        "axis_to_terminator_plane_angle": axis_plane_angle,
+        "equator_terminator_plane_angle": equator_terminator_angle,
+        "axis_floor_normal_angle": axis_tilt_deg,
+        "terminator_radius": terminator_radius,
+        "terminator_center_offset": np.linalg.norm(terminator_center),
+        "terminator_note": terminator_note,
+        "axis_in_terminator": axis_plane_angle < 1.0,
+        "terminator_perpendicular_to_floor": abs(plane_floor_angle - 90) < 1.0,
+    }
+
+    return {
+        "light_pos": light_pos,
+        "center_to_light": center_to_light,
+        "spin_axis": spin_axis,
+        "terminator_center": terminator_center,
+        "terminator_radius": terminator_radius,
+        "terminator_points": terminator_points,
+        "equator_points": equator_points,
+        "axis_points": axis_points,
+        "metrics": metrics,
+    }
+
+def make_terminator_geometry_figure(
+    sphere_radius,
+    light_distance,
+    light_height,
+    sphere_center_height,
+    axis_tilt_deg,
+    axis_azimuth_deg,
+    light_model,
+    show_hot_wire_fan,
+):
+    snapshot = terminator_geometry_snapshot(
+        sphere_radius,
+        light_distance,
+        light_height,
+        sphere_center_height,
+        axis_tilt_deg,
+        axis_azimuth_deg,
+        light_model,
+    )
+    light_pos = snapshot["light_pos"]
+    terminator_points = snapshot["terminator_points"]
+    equator_points = snapshot["equator_points"]
+    axis_points = snapshot["axis_points"]
     floor_z = -sphere_center_height
     plot_size = max(light_distance * 1.08, sphere_radius * 3.2, sphere_center_height + sphere_radius + 2)
-
-    axis_points = np.column_stack((-spin_axis * sphere_radius * 1.45, spin_axis * sphere_radius * 1.45))
     vertical_points = np.array([[0, 0], [0, 0], [floor_z, sphere_radius * 1.45]])
 
     fig = go.Figure()
@@ -516,26 +568,273 @@ def make_terminator_geometry_figure(
         legend=dict(bgcolor="rgba(0,0,0,0)"),
     )
 
-    plane_floor_angle = np.rad2deg(np.arccos(np.clip(abs(np.dot(center_to_light, floor_normal)), 0, 1)))
-    axis_plane_angle = np.rad2deg(np.arcsin(np.clip(abs(np.dot(spin_axis, center_to_light)), 0, 1)))
-    equator_terminator_angle = np.rad2deg(np.arccos(np.clip(abs(np.dot(spin_axis, center_to_light)), 0, 1)))
-    axis_floor_angle = axis_tilt_deg
-    light_elevation_angle = np.rad2deg(np.arcsin(np.clip(center_to_light[2], -1, 1)))
+    return fig, snapshot["metrics"]
 
-    metrics = {
-        "light_distance_from_center": light_distance_from_center,
-        "light_elevation_angle": light_elevation_angle,
-        "terminator_floor_angle": plane_floor_angle,
-        "axis_to_terminator_plane_angle": axis_plane_angle,
-        "equator_terminator_plane_angle": equator_terminator_angle,
-        "axis_floor_normal_angle": axis_floor_angle,
-        "terminator_radius": terminator_radius,
-        "terminator_center_offset": np.linalg.norm(terminator_center),
-        "terminator_note": terminator_note,
-        "axis_in_terminator": axis_plane_angle < 1.0,
-        "terminator_perpendicular_to_floor": abs(plane_floor_angle - 90) < 1.0,
-    }
-    return fig, metrics
+def make_terminator_animation_figure(
+    sphere_radius,
+    light_distance,
+    light_height,
+    sphere_center_height,
+    axis_tilt_deg,
+    axis_azimuth_deg,
+    light_model,
+    show_hot_wire_fan,
+    frames_count,
+):
+    floor_z = -sphere_center_height
+    plot_size = max(light_distance * 1.08, sphere_radius * 3.2, sphere_center_height + sphere_radius + 2)
+    vertical_points = np.array([[0, 0], [0, 0], [floor_z, sphere_radius * 1.45]])
+    base_snapshot = terminator_geometry_snapshot(
+        sphere_radius,
+        light_distance,
+        light_height,
+        sphere_center_height,
+        axis_tilt_deg,
+        axis_azimuth_deg,
+        light_model,
+    )
+    light_pos = base_snapshot["light_pos"]
+
+    static_traces = [
+        floor_plane_surface(plot_size, floor_z),
+        sphere_surface(sphere_radius),
+        make_sphere_wireframe(sphere_radius, line_color="#9ca3af"),
+        go.Scatter3d(
+            x=[light_pos[0]],
+            y=[light_pos[1]],
+            z=[light_pos[2]],
+            mode="markers",
+            marker=dict(size=10, color="#fde047"),
+            name="Omnidirectional light source",
+        ),
+        go.Scatter3d(
+            x=[light_pos[0], 0],
+            y=[light_pos[1], 0],
+            z=[light_pos[2], 0],
+            mode="lines",
+            line=dict(color="#fde047", width=5),
+            name="Center incident direction",
+        ),
+        go.Scatter3d(
+            x=vertical_points[0],
+            y=vertical_points[1],
+            z=vertical_points[2],
+            mode="lines",
+            line=dict(color="#a78bfa", width=4, dash="dot"),
+            name="Floor normal",
+        ),
+    ]
+
+    def dynamic_traces(snapshot):
+        terminator_points = snapshot["terminator_points"]
+        equator_points = snapshot["equator_points"]
+        axis_points = snapshot["axis_points"]
+        traces = [
+            go.Scatter3d(
+                x=equator_points[0],
+                y=equator_points[1],
+                z=equator_points[2],
+                mode="lines",
+                line=dict(color="#38bdf8", width=6),
+                name="Equator",
+            ),
+            go.Scatter3d(
+                x=terminator_points[0],
+                y=terminator_points[1],
+                z=terminator_points[2],
+                mode="lines",
+                line=dict(color="#f97316", width=8),
+                name="Terminator / hot wire",
+            ),
+            go.Scatter3d(
+                x=axis_points[0],
+                y=axis_points[1],
+                z=axis_points[2],
+                mode="lines",
+                line=dict(color="#facc15", width=8),
+                name="Rotation axis",
+            ),
+        ]
+        if show_hot_wire_fan:
+            spoke_indices = np.linspace(0, terminator_points.shape[1] - 1, 18, dtype=int)
+            x_spokes = []
+            y_spokes = []
+            z_spokes = []
+            for idx in spoke_indices:
+                x_spokes.extend([terminator_points[0, idx], 0, None])
+                y_spokes.extend([terminator_points[1, idx], 0, None])
+                z_spokes.extend([terminator_points[2, idx], 0, None])
+            traces.append(go.Scatter3d(
+                x=x_spokes,
+                y=y_spokes,
+                z=z_spokes,
+                mode="lines",
+                line=dict(color="#fb923c", width=2),
+                opacity=0.5,
+                name="Hot-wire draw to center",
+            ))
+        return traces
+
+    azimuths = axis_azimuth_deg + np.linspace(0, 360, frames_count, endpoint=False)
+    frames = []
+    first_dynamic = None
+    for frame_i, azimuth in enumerate(azimuths):
+        snapshot = terminator_geometry_snapshot(
+            sphere_radius,
+            light_distance,
+            light_height,
+            sphere_center_height,
+            axis_tilt_deg,
+            azimuth,
+            light_model,
+        )
+        traces = dynamic_traces(snapshot)
+        if first_dynamic is None:
+            first_dynamic = traces
+        frames.append(go.Frame(
+            name=f"frame_{frame_i}",
+            data=static_traces + traces,
+            layout=go.Layout(title_text=f"Axis azimuth sweep: {azimuth % 360:.0f}°"),
+        ))
+
+    fig = go.Figure(
+        data=static_traces + first_dynamic,
+        frames=frames,
+        layout=go.Layout(
+            title="Animated Terminator Geometry: Axis Azimuth Sweep",
+            height=760,
+            margin=dict(l=0, r=0, t=60, b=0),
+            scene=dict(
+                xaxis=dict(title="x (ft)", range=[-plot_size, plot_size * 0.35]),
+                yaxis=dict(title="y (ft)", range=[-plot_size * 0.55, plot_size * 0.55]),
+                zaxis=dict(title="z relative to sphere center (ft)", range=[floor_z - 0.5, max(sphere_radius * 1.7, light_pos[2] + 1)]),
+                aspectmode="data",
+                camera=dict(eye=dict(x=1.55, y=1.25, z=0.85)),
+            ),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
+        )
+    )
+    return fig, base_snapshot["metrics"]
+
+def make_terminator_wireframe_2d(
+    sphere_radius,
+    light_distance,
+    light_height,
+    sphere_center_height,
+    axis_tilt_deg,
+    axis_azimuth_deg,
+    light_model,
+):
+    snapshot = terminator_geometry_snapshot(
+        sphere_radius,
+        light_distance,
+        light_height,
+        sphere_center_height,
+        axis_tilt_deg,
+        axis_azimuth_deg,
+        light_model,
+    )
+    light_pos = snapshot["light_pos"]
+    center_to_light = snapshot["center_to_light"]
+    spin_axis = snapshot["spin_axis"]
+    floor_z = -sphere_center_height
+    plot_left = min(light_pos[0] - 2, -sphere_radius * 2.2)
+    plot_right = sphere_radius * 2.2
+    plot_top = max(light_pos[2] + 2, sphere_radius * 1.7)
+    plot_bottom = floor_z - 0.5
+
+    theta = np.linspace(0, 2 * np.pi, 240)
+    circle_x = sphere_radius * np.cos(theta)
+    circle_z = sphere_radius * np.sin(theta)
+
+    terminator_dir = normalize_vector(np.array([-center_to_light[2], center_to_light[0]]))
+    if np.linalg.norm(terminator_dir) < 1e-9:
+        terminator_dir = np.array([0.0, 1.0])
+    terminator_center = np.array([
+        snapshot["terminator_center"][0],
+        snapshot["terminator_center"][2],
+    ])
+    t_radius = snapshot["terminator_radius"]
+    terminator_line = np.column_stack((
+        terminator_center - terminator_dir * t_radius,
+        terminator_center + terminator_dir * t_radius,
+    ))
+
+    axis_xz = np.array([spin_axis[0], spin_axis[2]])
+    if np.linalg.norm(axis_xz) < 1e-9:
+        axis_xz = np.array([0.0, 1.0])
+    axis_xz = normalize_vector(axis_xz)
+    axis_line = np.column_stack((-axis_xz * sphere_radius * 1.35, axis_xz * sphere_radius * 1.35))
+
+    equator_xz = normalize_vector(np.array([-axis_xz[1], axis_xz[0]]))
+    equator_line = np.column_stack((-equator_xz * sphere_radius * 1.05, equator_xz * sphere_radius * 1.05))
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[plot_left, plot_right],
+        y=[floor_z, floor_z],
+        mode="lines",
+        line=dict(color="#6b7280", width=4),
+        name="Warehouse floor",
+    ))
+    fig.add_trace(go.Scatter(
+        x=circle_x,
+        y=circle_z,
+        mode="lines",
+        line=dict(color="#9ca3af", width=3),
+        name="Sphere cross-section",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[light_pos[0]],
+        y=[light_pos[2]],
+        mode="markers",
+        marker=dict(size=14, color="#fde047"),
+        name="Light source",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[light_pos[0], 0],
+        y=[light_pos[2], 0],
+        mode="lines",
+        line=dict(color="#fde047", width=4),
+        name="Center incident direction",
+    ))
+    fig.add_trace(go.Scatter(
+        x=terminator_line[0],
+        y=terminator_line[1],
+        mode="lines",
+        line=dict(color="#f97316", width=6),
+        name="Terminator / hot wire slice",
+    ))
+    fig.add_trace(go.Scatter(
+        x=axis_line[0],
+        y=axis_line[1],
+        mode="lines",
+        line=dict(color="#facc15", width=5),
+        name="Rotation axis projection",
+    ))
+    fig.add_trace(go.Scatter(
+        x=equator_line[0],
+        y=equator_line[1],
+        mode="lines",
+        line=dict(color="#38bdf8", width=4, dash="dash"),
+        name="Equator projection",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[0, 0],
+        y=[floor_z, sphere_radius * 1.45],
+        mode="lines",
+        line=dict(color="#a78bfa", width=3, dash="dot"),
+        name="Floor normal",
+    ))
+    fig.update_layout(
+        title="2D Wireframe Slice: Floor, Light Direction, Axis, Equator, and Hot-Wire Cut",
+        xaxis=dict(title="x (ft)", range=[plot_left, plot_right], zeroline=False, gridcolor=GRID_COLOR),
+        yaxis=dict(title="z relative to sphere center (ft)", range=[plot_bottom, plot_top], scaleanchor="x", scaleratio=1, zeroline=False, gridcolor=GRID_COLOR),
+        height=560,
+        margin=dict(l=20, r=20, t=60, b=40),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    return fig, snapshot["metrics"]
 
 def simulate_bromine_release_2d(
     chamber_radius_m,
@@ -1484,6 +1783,11 @@ def render_terminator_geometry_app():
             ["Parallel rays", "Point source"],
             help="The source emits omnidirectionally, but the ideal solar model often uses the local parallel-ray approximation.",
         )
+        view_mode = st.radio(
+            "View",
+            ["3D Static", "3D Animated", "2D Wireframe"],
+            help="Use the 2D wireframe for the clearest cross-section and the animated view to sweep the axis azimuth.",
+        )
         sphere_radius = st.slider("Sphere radius (ft)", 1.0, 6.0, 2.0, 0.25)
         sphere_center_height = st.slider("Sphere center height above floor (ft)", 2.0, 20.0, 10.0, 0.5)
         light_distance = st.slider("Horizontal light distance (ft)", 5.0, 80.0, 20.0, 1.0)
@@ -1510,17 +1814,43 @@ def render_terminator_geometry_app():
             help="Controls which horizontal direction the tilted axis leans toward.",
         )
         show_hot_wire_fan = st.checkbox("Show hot-wire draw to center", value=True)
+        if view_mode == "3D Animated":
+            terminator_frames = st.slider("Animation frames", 36, 90, 60, 6)
+            terminator_speed = st.slider("Animation speed", 10, 160, 45, 5)
 
-    fig, metrics = make_terminator_geometry_figure(
-        sphere_radius=sphere_radius,
-        light_distance=light_distance,
-        light_height=light_height,
-        sphere_center_height=sphere_center_height,
-        axis_tilt_deg=axis_tilt_deg,
-        axis_azimuth_deg=axis_azimuth_deg,
-        light_model=light_model,
-        show_hot_wire_fan=show_hot_wire_fan,
-    )
+    if view_mode == "3D Animated":
+        fig, metrics = make_terminator_animation_figure(
+            sphere_radius=sphere_radius,
+            light_distance=light_distance,
+            light_height=light_height,
+            sphere_center_height=sphere_center_height,
+            axis_tilt_deg=axis_tilt_deg,
+            axis_azimuth_deg=axis_azimuth_deg,
+            light_model=light_model,
+            show_hot_wire_fan=show_hot_wire_fan,
+            frames_count=terminator_frames,
+        )
+    elif view_mode == "2D Wireframe":
+        fig, metrics = make_terminator_wireframe_2d(
+            sphere_radius=sphere_radius,
+            light_distance=light_distance,
+            light_height=light_height,
+            sphere_center_height=sphere_center_height,
+            axis_tilt_deg=axis_tilt_deg,
+            axis_azimuth_deg=axis_azimuth_deg,
+            light_model=light_model,
+        )
+    else:
+        fig, metrics = make_terminator_geometry_figure(
+            sphere_radius=sphere_radius,
+            light_distance=light_distance,
+            light_height=light_height,
+            sphere_center_height=sphere_center_height,
+            axis_tilt_deg=axis_tilt_deg,
+            axis_azimuth_deg=axis_azimuth_deg,
+            light_model=light_model,
+            show_hot_wire_fan=show_hot_wire_fan,
+        )
 
     st.subheader("Core Geometry Tests")
     col1, col2, col3 = st.columns(3)
@@ -1547,9 +1877,21 @@ def render_terminator_geometry_app():
             "The hot-wire/terminator geometry is controlled by the incident light direction. Change light height or sphere height to see the cut tilt relative to the floor."
         )
 
-    st.subheader("3D Warehouse Geometry")
+    st.subheader(view_mode)
     fig = apply_dark_theme(fig)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
+    if view_mode == "3D Animated":
+        frame_dur = int(1000 / terminator_speed)
+        fig, num_frames = add_animation_controls(fig, frame_dur=frame_dur, show_slider=True)
+        render_plotly_with_autoplay(
+            fig,
+            frame_dur,
+            auto_play=False,
+            loop_animation=True,
+            num_frames=num_frames,
+            height=760,
+        )
+    else:
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
 
     with st.expander("Geometry Interpretation", expanded=True):
         st.markdown(
@@ -1557,6 +1899,10 @@ def render_terminator_geometry_app():
             **What is being modelled**
 
             The light source is shown as an omnidirectional point source, but the terminator geometry is controlled by the incident light direction at the sphere. In the `Parallel rays` idealization, that direction is represented by a single vector from the light toward the sphere center.
+
+            The `3D Animated` view sweeps the rotation-axis azimuth while holding the floor and light setup fixed. It is a diagnostic loop for how alignment changes with orientation, not a claim that the axis must physically sweep this way.
+
+            The `2D Wireframe` view is an elevation slice/projection through the sphere center. It is intended to make the hot-wire cut, floor normal, incident light direction, rotation-axis projection, and equator projection easier to compare.
 
             **Terminator / hot-wire cut**
 
