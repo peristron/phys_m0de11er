@@ -393,8 +393,14 @@ def terminator_geometry_snapshot(
     axis_tilt_deg,
     axis_azimuth_deg,
     light_model,
+    light_azimuth_deg=180.0,
 ):
-    light_pos = np.array([-light_distance, 0.0, light_height - sphere_center_height])
+    light_azimuth = np.deg2rad(light_azimuth_deg)
+    light_pos = np.array([
+        light_distance * np.cos(light_azimuth),
+        light_distance * np.sin(light_azimuth),
+        light_height - sphere_center_height,
+    ])
     light_distance_from_center = np.linalg.norm(light_pos)
     if light_distance_from_center <= sphere_radius:
         light_pos = normalize_vector(light_pos) * (sphere_radius * 1.05)
@@ -580,6 +586,7 @@ def make_terminator_animation_figure(
     light_model,
     show_hot_wire_fan,
     frames_count,
+    sweep_mode,
 ):
     floor_z = -sphere_center_height
     plot_size = max(light_distance * 1.08, sphere_radius * 3.2, sphere_center_height + sphere_radius + 2)
@@ -593,28 +600,11 @@ def make_terminator_animation_figure(
         axis_azimuth_deg,
         light_model,
     )
-    light_pos = base_snapshot["light_pos"]
 
     static_traces = [
         floor_plane_surface(plot_size, floor_z),
         sphere_surface(sphere_radius),
         make_sphere_wireframe(sphere_radius, line_color="#9ca3af"),
-        go.Scatter3d(
-            x=[light_pos[0]],
-            y=[light_pos[1]],
-            z=[light_pos[2]],
-            mode="markers",
-            marker=dict(size=10, color="#fde047"),
-            name="Omnidirectional light source",
-        ),
-        go.Scatter3d(
-            x=[light_pos[0], 0],
-            y=[light_pos[1], 0],
-            z=[light_pos[2], 0],
-            mode="lines",
-            line=dict(color="#fde047", width=5),
-            name="Center incident direction",
-        ),
         go.Scatter3d(
             x=vertical_points[0],
             y=vertical_points[1],
@@ -626,10 +616,27 @@ def make_terminator_animation_figure(
     ]
 
     def dynamic_traces(snapshot):
+        light_pos = snapshot["light_pos"]
         terminator_points = snapshot["terminator_points"]
         equator_points = snapshot["equator_points"]
         axis_points = snapshot["axis_points"]
         traces = [
+            go.Scatter3d(
+                x=[light_pos[0]],
+                y=[light_pos[1]],
+                z=[light_pos[2]],
+                mode="markers",
+                marker=dict(size=10, color="#fde047"),
+                name="Omnidirectional light source",
+            ),
+            go.Scatter3d(
+                x=[light_pos[0], 0],
+                y=[light_pos[1], 0],
+                z=[light_pos[2], 0],
+                mode="lines",
+                line=dict(color="#fde047", width=5),
+                name="Center incident direction",
+            ),
             go.Scatter3d(
                 x=equator_points[0],
                 y=equator_points[1],
@@ -675,18 +682,31 @@ def make_terminator_animation_figure(
             ))
         return traces
 
-    azimuths = axis_azimuth_deg + np.linspace(0, 360, frames_count, endpoint=False)
+    sweep_values = np.linspace(0, 360, frames_count, endpoint=False)
     frames = []
     first_dynamic = None
-    for frame_i, azimuth in enumerate(azimuths):
+    for frame_i, sweep_value in enumerate(sweep_values):
+        frame_axis_azimuth = axis_azimuth_deg
+        frame_light_azimuth = 180.0
+        title_value = sweep_value
+        title_label = "Light direction sweep"
+        if sweep_mode == "Axis azimuth sweep":
+            frame_axis_azimuth = axis_azimuth_deg + sweep_value
+            title_label = "Axis azimuth sweep"
+            title_value = frame_axis_azimuth % 360
+        else:
+            frame_light_azimuth = 180.0 + sweep_value
+            title_value = frame_light_azimuth % 360
+
         snapshot = terminator_geometry_snapshot(
             sphere_radius,
             light_distance,
             light_height,
             sphere_center_height,
             axis_tilt_deg,
-            azimuth,
+            frame_axis_azimuth,
             light_model,
+            light_azimuth_deg=frame_light_azimuth,
         )
         traces = dynamic_traces(snapshot)
         if first_dynamic is None:
@@ -694,20 +714,20 @@ def make_terminator_animation_figure(
         frames.append(go.Frame(
             name=f"frame_{frame_i}",
             data=static_traces + traces,
-            layout=go.Layout(title_text=f"Axis azimuth sweep: {azimuth % 360:.0f}°"),
+            layout=go.Layout(title_text=f"{title_label}: {title_value:.0f}°"),
         ))
 
     fig = go.Figure(
         data=static_traces + first_dynamic,
         frames=frames,
         layout=go.Layout(
-            title="Animated Terminator Geometry: Axis Azimuth Sweep",
+            title=f"Animated Terminator Geometry: {sweep_mode}",
             height=760,
             margin=dict(l=0, r=0, t=60, b=0),
             scene=dict(
                 xaxis=dict(title="x (ft)", range=[-plot_size, plot_size * 0.35]),
                 yaxis=dict(title="y (ft)", range=[-plot_size * 0.55, plot_size * 0.55]),
-                zaxis=dict(title="z relative to sphere center (ft)", range=[floor_z - 0.5, max(sphere_radius * 1.7, light_pos[2] + 1)]),
+                zaxis=dict(title="z relative to sphere center (ft)", range=[floor_z - 0.5, max(sphere_radius * 1.7, base_snapshot["light_pos"][2] + 1)]),
                 aspectmode="data",
                 camera=dict(eye=dict(x=1.55, y=1.25, z=0.85)),
             ),
@@ -1815,6 +1835,11 @@ def render_terminator_geometry_app():
         )
         show_hot_wire_fan = st.checkbox("Show hot-wire draw to center", value=True)
         if view_mode == "3D Animated":
+            terminator_sweep_mode = st.radio(
+                "Animation sweep",
+                ["Light direction sweep", "Axis azimuth sweep"],
+                help="Light direction sweep visibly moves the terminator. Axis azimuth sweep is subtle when axis tilt is 0°.",
+            )
             terminator_frames = st.slider("Animation frames", 36, 90, 60, 6)
             terminator_speed = st.slider("Animation speed", 10, 160, 45, 5)
 
@@ -1829,6 +1854,7 @@ def render_terminator_geometry_app():
             light_model=light_model,
             show_hot_wire_fan=show_hot_wire_fan,
             frames_count=terminator_frames,
+            sweep_mode=terminator_sweep_mode,
         )
     elif view_mode == "2D Wireframe":
         fig, metrics = make_terminator_wireframe_2d(
@@ -1900,7 +1926,7 @@ def render_terminator_geometry_app():
 
             The light source is shown as an omnidirectional point source, but the terminator geometry is controlled by the incident light direction at the sphere. In the `Parallel rays` idealization, that direction is represented by a single vector from the light toward the sphere center.
 
-            The `3D Animated` view sweeps the rotation-axis azimuth while holding the floor and light setup fixed. It is a diagnostic loop for how alignment changes with orientation, not a claim that the axis must physically sweep this way.
+            The `3D Animated` view can sweep either the incident light direction or the rotation-axis azimuth. `Light direction sweep` visibly moves the terminator/hot-wire plane around the sphere. `Axis azimuth sweep` is useful when the axis is tilted, but it can look unchanged when the axis tilt is `0°` because a vertical axis is symmetric under azimuth changes.
 
             The `2D Wireframe` view is an elevation slice/projection through the sphere center. It is intended to make the hot-wire cut, floor normal, incident light direction, rotation-axis projection, and equator projection easier to compare.
 
